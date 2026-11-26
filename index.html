@@ -8,7 +8,7 @@
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A6%86%3C/text%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@600;700&display=swap" rel="stylesheet">
 <style>
   :root { --water: #8ccff0; --ink: #151515; --yellow: #fbe27a; }
   * { box-sizing: border-box; }
@@ -19,36 +19,26 @@
   }
   canvas {
     position: fixed; inset: 0; width: 100%; height: 100%;
-    touch-action: none; cursor: crosshair; display: block;
+    touch-action: none; display: block;
   }
-  .tools {
+  #sound {
     position: fixed; top: 14px; right: 14px;
-    display: flex; gap: 8px;
-    user-select: none; -webkit-user-select: none;
-  }
-  .tools button {
     width: 44px; height: 44px; padding: 0;
     display: grid; place-items: center;
     font-size: 20px; line-height: 1;
     border: 3px solid var(--ink); border-radius: 14px; background: #fff;
     box-shadow: 2px 3px 0 var(--ink); cursor: pointer;
     transition: transform .06s, box-shadow .06s;
+    user-select: none; -webkit-user-select: none;
   }
-  .tools button[aria-pressed="true"] { background: var(--yellow); }
-  .tools button:active { transform: translate(2px, 3px); box-shadow: 0 0 0 var(--ink); }
-  .tools button:focus-visible { outline: 3px solid #2f7fd0; outline-offset: 2px; }
-  .tools button:disabled { opacity: .45; cursor: default; }
+  #sound[aria-pressed="true"] { background: var(--yellow); }
+  #sound:active { transform: translate(2px, 3px); box-shadow: 0 0 0 var(--ink); }
+  #sound:focus-visible { outline: 3px solid #2f7fd0; outline-offset: 2px; }
 </style>
 </head>
 <body>
-<canvas id="lake" aria-label="Lake with a duck. Drag to make the duck swim and watch its wake."></canvas>
-
-<div class="tools">
-  <button id="btnProt" aria-pressed="true" aria-label="Protractor">📐</button>
-  <button id="btnLock" aria-pressed="true" aria-label="Pin protractor to duck">📌</button>
-  <button id="btnFreeze" aria-pressed="false" aria-label="Freeze">⏸</button>
-  <button id="btnSound" aria-pressed="true" aria-label="Sound">🔊</button>
-</div>
+<canvas id="lake" aria-label="Lake with a duck that follows the pointer and leaves a wake."></canvas>
+<button id="sound" aria-pressed="false" aria-label="Sound">🔇</button>
 
 <script>
 (() => {
@@ -63,6 +53,7 @@
   const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
   const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
   const angDiff = (a, b) => { let d = (b - a) % TAU; if (d > Math.PI) d -= TAU; if (d < -Math.PI) d += TAU; return d; };
+  const hash = (a, b) => { const s = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return s - Math.floor(s); };
 
   // ---------- wake physics ----------
   // Deep-water waves: phase speed c = sqrt(g/k), group speed c/2. A source moving at U makes
@@ -71,9 +62,9 @@
   // phases gives the Kelvin crests, whose envelope sits at arcsin(1/3) ≈ 19.47°.
   // For readability the crest spacing never drops below LAMBDA_MIN; this scales the pattern
   // without changing its shape or angle.
-  const G = 9000;            // gravity in px/s²
-  const LAMBDA_MIN = 85;     // px, floor on drawn crest spacing
-  const MAX_AGE = 4.5;       // seconds of wake kept
+  const G = 9000;
+  const LAMBDA_MIN = 85;
+  const MAX_AGE = 4.5;
   const THETA_MAX = 80 * Math.PI / 180;
   const NT = 121;
   const MAX_LEVEL = 9;
@@ -92,16 +83,13 @@
   const CA = new Float32Array((MAX_LEVEL + 1) * NT);
 
   let simT = 0, clock = 0;
-  let frozen = false;
-  const hist = []; // {t, x, y, dx, dy, u, k, amp}
+  const hist = [];
 
   const duck = { x: 0, y: 0, vx: 0, vy: 0, heading: 0, speed: 0 };
-  const pointer = { x: 0, y: 0 };
-  let mode = null; // 'duck' | 'prot' | 'rot'
-  let grab = { dx: 0, dy: 0 };
+  const pointer = { x: 0, y: 0, active: false };
 
-  const SPAN = 25 * Math.PI / 180; // protractor half-width
-  const prot = { x: 0, y: 0, rot: Math.PI, R: 400, visible: true, locked: true };
+  const SPAN = 25 * Math.PI / 180;
+  let scaleR = 400;
   const rings = [];
   let lastRing = 0;
 
@@ -118,15 +106,14 @@
     W = window.innerWidth; H = window.innerHeight;
     canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-    prot.R = clamp(Math.max(W, H) * 0.42, 240, 600);
+    scaleR = clamp(Math.max(W, H) * 0.4, 230, 560);
     if (first) init();
     duck.x = clamp(duck.x, 30, W - 30); duck.y = clamp(duck.y, 30, H - 30);
-    if (!prot.locked) { prot.x = clamp(prot.x, 0, W); prot.y = clamp(prot.y, 0, H); }
   }
 
   function init() {
     const U0 = 380;
-    duck.x = W * (W > 700 ? 0.55 : 0.5); duck.y = H * 0.55;
+    duck.x = W * 0.55; duck.y = H * 0.55;
     duck.vx = U0; duck.vy = -U0 * 0.1; duck.heading = Math.atan2(duck.vy, duck.vx);
     const dx = Math.cos(duck.heading), dy = Math.sin(duck.heading);
     const s = sample(U0);
@@ -134,20 +121,20 @@
     for (let tau = MAX_AGE; tau > 0; tau -= 1 / 60) {
       hist.push({ t: simT - tau, x: duck.x - dx * U0 * tau, y: duck.y - dy * U0 * tau, dx, dy, u: U0, k: s.k, amp: s.amp });
     }
-    pointer.x = duck.x; pointer.y = duck.y;
   }
 
   // ---------- simulation ----------
   function updateDuck(dt) {
-    if (mode === 'duck') {
+    if (pointer.active) {
       const tx = pointer.x - duck.x, ty = pointer.y - duck.y;
       const d = Math.hypot(tx, ty);
       let dvx = 0, dvy = 0;
-      if (d > 3) {
-        const s = Math.min(MAX_SPEED, d * 3.0);
+      // ease in: no pull when the pointer is right on the duck, full speed when far away
+      if (d > 4) {
+        const s = Math.min(MAX_SPEED, (d - 4) * 2.6);
         dvx = tx / d * s; dvy = ty / d * s;
       }
-      const k = 1 - Math.exp(-dt * 4.5);
+      const k = 1 - Math.exp(-dt * 3.2);
       duck.vx += (dvx - duck.vx) * k; duck.vy += (dvy - duck.vy) * k;
     } else {
       const f = Math.exp(-dt * 0.55);
@@ -161,7 +148,7 @@
     if (duck.y > H - m) { duck.y = H - m; duck.vy = -Math.abs(duck.vy) * 0.3; }
     duck.speed = Math.hypot(duck.vx, duck.vy);
     if (duck.speed > 6) {
-      duck.heading += angDiff(duck.heading, Math.atan2(duck.vy, duck.vx)) * (1 - Math.exp(-dt * 12));
+      duck.heading += angDiff(duck.heading, Math.atan2(duck.vy, duck.vx)) * (1 - Math.exp(-dt * 9));
     }
 
     const u = duck.speed;
@@ -171,11 +158,9 @@
     hist.push({ t: simT, x: duck.x, y: duck.y, dx, dy, u, k: s.k, amp: s.amp });
     while (hist.length && simT - hist[0].t > MAX_AGE) hist.shift();
 
-    if (u < 40 && simT - lastRing > 2.8) addRing(duck.x, duck.y);
+    if (u < 40 && simT - lastRing > 2.8) { rings.push({ x: duck.x, y: duck.y, t: simT }); lastRing = simT; }
     for (let i = rings.length - 1; i >= 0; i--) if (simT - rings[i].t > 3) rings.splice(i, 1);
   }
-
-  function addRing(x, y) { rings.push({ x, y, t: simT }); lastRing = simT; }
 
   function computeWake() {
     CX.fill(NaN); CY.fill(NaN); CA.fill(0);
@@ -215,6 +200,7 @@
   }
 
   // ---------- drawing ----------
+  const INK = '#151515';
   const DASH = [90, 22, 50, 18, 130, 24];
   const NB = 8;
   const inkStyle = [], shadowStyle = [], inkW = [], shadowW = [];
@@ -303,12 +289,59 @@
     ctx.restore();
   }
 
+  // ---------- hand-drawn helpers ----------
+  // Outlines wobble a little, vary in thickness, overshoot where they close, and the fill sits
+  // slightly off the line. The wobble re-rolls a few times a second like a hand-animated "boil".
+  let boil = 0;
+
+  function sketchLine(pts, seed, base) {
+    // smooth curve through pts, stroked in short pieces with varying width
+    const n = pts.length;
+    if (n < 2) return;
+    const p1 = hash(seed, boil) * TAU, p2 = hash(seed + 3, boil) * TAU;
+    let prev = pts[0];
+    for (let i = 1; i < n; i++) {
+      const t = i / (n - 1);
+      ctx.lineWidth = base * (1 + 0.28 * Math.sin(t * 5 + p1) + 0.14 * Math.sin(t * 11 + p2));
+      ctx.beginPath(); ctx.moveTo(prev.x, prev.y); ctx.lineTo(pts[i].x, pts[i].y); ctx.stroke();
+      prev = pts[i];
+    }
+  }
+
+  function wobbleEllipsePts(e, seed, from, to, n, amp) {
+    const ph = [hash(seed, boil) * TAU, hash(seed + 1, boil) * TAU, hash(seed + 2, boil) * TAU];
+    const ca = Math.cos(e.ang), sa = Math.sin(e.ang);
+    const pts = [];
+    for (let i = 0; i <= n; i++) {
+      const t = from + (to - from) * i / n;
+      const off = amp * (0.6 * Math.sin(2 * t + ph[0]) + 0.4 * Math.sin(3 * t + ph[1]) + 0.25 * Math.sin(5 * t + ph[2]));
+      const lx = (e.rx + off) * Math.cos(t), ly = (e.ry + off) * Math.sin(t);
+      pts.push({ x: e.x + lx * ca - ly * sa, y: e.y + lx * sa + ly * ca });
+    }
+    return pts;
+  }
+
+  function sketchBlob(e, fill, seed) {
+    const amp = Math.min(2.2, 0.08 * Math.min(e.rx, e.ry) + 0.8);
+    // fill, nudged off the outline
+    const fp = wobbleEllipsePts(e, seed + 10, 0, TAU, 36, amp);
+    ctx.beginPath();
+    ctx.moveTo(fp[0].x + 1.6, fp[0].y + 1.2);
+    for (const p of fp) ctx.lineTo(p.x + 1.6, p.y + 1.2);
+    ctx.closePath();
+    ctx.fillStyle = fill; ctx.fill();
+    // outline with a little overshoot past the start
+    const start = hash(seed, 7) * TAU;
+    ctx.strokeStyle = INK;
+    sketchLine(wobbleEllipsePts(e, seed, start, start + TAU + 0.35, 48, amp), seed, 5);
+  }
+
   // ---------- duck (3/4 view) ----------
   // The water is drawn straight down so angles measure true; the duck is drawn
   // from a camera tilted CAM above the horizon so it reads as a floating toy.
   const CAM = 48 * Math.PI / 180;
   const SINC = Math.sin(CAM), COSC = Math.cos(CAM);
-  const YELLOW = '#fbe27a', ORANGE = '#f7a13b', INK = '#151515';
+  const YELLOW = '#fbe27a', ORANGE = '#f7a13b';
   const WING = [[48, 28], [72, 40], [102, 42], [128, 32], [142, 15], [137, 0], [120, -7], [100, -4]];
 
   function drawDuck() {
@@ -323,7 +356,6 @@
       return { x: duck.x + X, y: duck.y + Y * SINC - (u + bob) * COSC, d: Y * COSC + u * SINC };
     };
     const facing = (nf, ns, nu) => (nf * sh + ns * ch) * COSC + nu * SINC;
-    // outline of an ellipsoid (semi-axes a forward, b side, c up, tilted by pitch)
     const ell = (cf, cs, cu, a, b, c, pitch) => {
       const cp = Math.cos(pitch), spn = Math.sin(pitch);
       const cols = [[a * cp, 0, a * spn], [0, b, 0], [-c * spn, 0, c * cp]];
@@ -336,11 +368,6 @@
       const m = (p + r) / 2, dd = Math.sqrt(((p - r) / 2) ** 2 + q * q);
       const c0 = P(cf, cs, cu);
       return { x: c0.x, y: c0.y, d: c0.d, rx: Math.sqrt(m + dd), ry: Math.sqrt(Math.max(0.01, m - dd)), ang: 0.5 * Math.atan2(2 * q, p - r) };
-    };
-    const blob = (e, fill) => {
-      ctx.beginPath(); ctx.ellipse(e.x, e.y, e.rx, e.ry, e.ang, 0, TAU);
-      ctx.fillStyle = fill; ctx.fill();
-      ctx.lineWidth = 5; ctx.strokeStyle = INK; ctx.stroke();
     };
 
     ctx.save();
@@ -358,132 +385,97 @@
     const HEAD = { cf: 25, cu: 42, r: 18 };
     const parts = [
       {
-        e: ell(BODY.cf, 0, BODY.cu, BODY.a, BODY.b, BODY.c, 0), fill: YELLOW,
+        e: ell(BODY.cf, 0, BODY.cu, BODY.a, BODY.b, BODY.c, 0), fill: YELLOW, seed: 1,
         after() {
-          ctx.lineWidth = 4.5; ctx.strokeStyle = INK;
+          ctx.strokeStyle = INK;
           for (const sg of [-1, 1]) {
-            let open = false;
-            for (const [lonD, latD] of WING) {
+            let run = [];
+            const flush = () => { if (run.length > 1) sketchLine(run, 20 + sg, 4.6); run = []; };
+            WING.forEach(([lonD, latD], i) => {
               const lon = lonD * Math.PI / 180, lat = latD * Math.PI / 180;
               const cl = Math.cos(lat);
               const nf = cl * Math.cos(lon) / BODY.a, ns = sg * cl * Math.sin(lon) / BODY.b, nu = Math.sin(lat) / BODY.c;
               const pt = P(BODY.cf + BODY.a * cl * Math.cos(lon), sg * BODY.b * cl * Math.sin(lon), BODY.cu + BODY.c * Math.sin(lat));
-              if (facing(nf, ns, nu) > 0) {
-                if (!open) { ctx.beginPath(); ctx.moveTo(pt.x, pt.y); open = true; }
-                else ctx.lineTo(pt.x, pt.y);
-              } else if (open) { ctx.stroke(); open = false; }
-            }
-            if (open) ctx.stroke();
+              pt.x += (hash(i + sg * 5, boil) - 0.5) * 1.6; pt.y += (hash(i + sg * 9, boil + 1) - 0.5) * 1.6;
+              if (facing(nf, ns, nu) > 0) run.push(pt); else flush();
+            });
+            flush();
           }
         }
       },
-      { e: ell(-36, 0, 26, 15, 10, 8, -0.6), fill: YELLOW },
+      { e: ell(-36, 0, 26, 15, 10, 8, -0.6), fill: YELLOW, seed: 2 },
       {
-        e: ell(HEAD.cf, 0, HEAD.cu, HEAD.r, HEAD.r, HEAD.r, 0), fill: YELLOW,
+        e: ell(HEAD.cf, 0, HEAD.cu, HEAD.r, HEAD.r, HEAD.r, 0), fill: YELLOW, seed: 3,
         after() {
           for (const sg of [-1, 1]) {
             let nf = 0.55, ns = 0.62 * sg, nu = 0.42;
             const l = Math.hypot(nf, ns, nu); nf /= l; ns /= l; nu /= l;
-            const v = facing(nf, ns, nu);
-            if (v < 0.1) continue;
+            if (facing(nf, ns, nu) < 0.1) continue;
             const pt = P(HEAD.cf + HEAD.r * nf, HEAD.r * ns, HEAD.cu + HEAD.r * nu);
             ctx.fillStyle = INK;
-            ctx.beginPath(); ctx.arc(pt.x, pt.y, 3.8, 0, TAU); ctx.fill();
+            ctx.beginPath(); ctx.ellipse(pt.x, pt.y, 3.4, 4.2, 0.2 * sg, 0, TAU); ctx.fill();
             ctx.fillStyle = '#fff';
-            ctx.beginPath(); ctx.arc(pt.x + 1.2, pt.y - 1.3, 1.2, 0, TAU); ctx.fill();
+            ctx.beginPath(); ctx.arc(pt.x + 1.1, pt.y - 1.5, 1.1, 0, TAU); ctx.fill();
           }
         }
       },
-      { e: ell(43, 0, 38, 11, 9, 4.5, -0.1), fill: ORANGE },
+      { e: ell(43, 0, 38, 11, 9, 4.5, -0.1), fill: ORANGE, seed: 4 },
     ];
     parts.sort((p1, p2) => p1.e.d - p2.e.d);
-    for (const p of parts) { blob(p.e, p.fill); if (p.after) p.after(); }
+    for (const p of parts) { sketchBlob(p.e, p.fill, p.seed); if (p.after) p.after(); }
     ctx.restore();
   }
 
-  // ---------- protractor (wedge) ----------
-  function protLocal(px, py) {
-    const dx = px - prot.x, dy = py - prot.y;
-    const c = Math.cos(-prot.rot), s = Math.sin(-prot.rot);
-    return { x: dx * c - dy * s, y: dx * s + dy * c };
-  }
-  function protScreen(lx, ly) {
-    const c = Math.cos(prot.rot), s = Math.sin(prot.rot);
-    return { x: prot.x + lx * c - ly * s, y: prot.y + lx * s + ly * c };
-  }
-  function hitProt(px, py) {
-    if (!prot.visible || prot.locked) return false;
-    const p = protLocal(px, py);
-    const r = Math.hypot(p.x, p.y);
-    return r <= prot.R + 6 && (r < 24 || Math.abs(Math.atan2(p.y, p.x)) <= SPAN + 0.04);
-  }
-  function hitHandle(px, py) {
-    if (!prot.visible || prot.locked) return false;
-    const h = protScreen(prot.R + 32, 0);
-    return Math.hypot(px - h.x, py - h.y) < 24;
-  }
+  // ---------- angle scale ----------
+  // A plain white scale pinned to the duck, pointing back along the wake.
+  function drawScale() {
+    const R = scaleR;
+    const rot = duck.heading + Math.PI;
+    const cr = Math.cos(rot), sr = Math.sin(rot);
+    const at = (r, a) => {
+      const lx = Math.cos(a) * r, ly = Math.sin(a) * r;
+      return { x: duck.x + lx * cr - ly * sr, y: duck.y + lx * sr + ly * cr };
+    };
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = 'rgba(255,255,255,0.95)';
+    ctx.fillStyle = 'rgba(255,255,255,0.95)';
 
-  function drawProtractor() {
-    if (!prot.visible) return;
-    const R = prot.R;
-    if (prot.locked) { prot.x = duck.x; prot.y = duck.y; prot.rot = duck.heading + Math.PI; }
-
-    ctx.save();
-    ctx.translate(prot.x, prot.y); ctx.rotate(prot.rot);
-    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-    const wedge = () => { ctx.beginPath(); ctx.moveTo(0, 0); ctx.arc(0, 0, R, -SPAN, SPAN); ctx.closePath(); };
-    ctx.save(); ctx.translate(4, 6); wedge(); ctx.fillStyle = 'rgba(21,21,21,0.14)'; ctx.fill(); ctx.restore();
-    wedge();
-    ctx.fillStyle = 'rgba(255,255,255,0.45)'; ctx.fill();
-    ctx.lineWidth = 4; ctx.strokeStyle = INK; ctx.stroke();
-
-    // ticks along the arc
-    const deg = SPAN * 180 / Math.PI;
-    for (let a = -deg; a <= deg + 1e-6; a++) {
-      const ai = Math.round(a);
-      const r = ai * Math.PI / 180, ca = Math.cos(r), sa = Math.sin(r);
-      const len = ai % 5 === 0 ? 22 : 10;
-      ctx.lineWidth = ai % 5 === 0 ? 3 : 1.6;
-      ctx.beginPath();
-      ctx.moveTo(ca * (R - 2), sa * (R - 2));
-      ctx.lineTo(ca * (R - 2 - len), sa * (R - 2 - len));
-      ctx.stroke();
+    // ticks
+    for (let d = -25; d <= 25; d++) {
+      const a = d * Math.PI / 180;
+      const major = d % 5 === 0;
+      const p = at(R, a), q = at(R - (major ? 22 : 10), a);
+      ctx.lineWidth = major ? 3.5 : 2;
+      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
     }
-    // centre line
-    ctx.setLineDash([12, 10]); ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(21,21,21,0.5)';
-    ctx.beginPath(); ctx.moveTo(18, 0); ctx.lineTo(R - 60, 0); ctx.stroke();
-    // Kelvin lines
-    ctx.setLineDash([14, 9]); ctx.lineWidth = 3; ctx.strokeStyle = '#e8731a';
+    // the wake's edges
+    ctx.setLineDash([14, 10]); ctx.lineWidth = 3;
     for (const sg of [-1, 1]) {
-      const ca = Math.cos(KELVIN), sa = Math.sin(KELVIN) * sg;
-      ctx.beginPath(); ctx.moveTo(ca * 18, sa * 18); ctx.lineTo(ca * (R - 4), sa * (R - 4)); ctx.stroke();
+      const p = at(30, KELVIN * sg), q = at(R + 10, KELVIN * sg);
+      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
     }
     ctx.setLineDash([]);
-    ctx.fillStyle = INK;
-    ctx.beginPath(); ctx.arc(0, 0, 5, 0, TAU); ctx.fill();
-    ctx.restore();
+    // arc between the edges with the full opening angle
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    for (let i = 0; i <= 30; i++) {
+      const p = at(R * 0.42, -KELVIN + 2 * KELVIN * i / 30);
+      if (i) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y);
+    }
+    ctx.stroke();
 
-    // upright labels
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.font = '600 13px Fredoka, ui-rounded, system-ui, sans-serif';
-    ctx.fillStyle = INK;
-    for (let a = -25; a <= 25; a += 5) {
-      const r = a * Math.PI / 180;
-      const p = protScreen(Math.cos(r) * (R - 40), Math.sin(r) * (R - 40));
-      ctx.fillText(Math.abs(a) + '°', p.x, p.y);
+    for (let d = -25; d <= 25; d += 5) {
+      const p = at(R + 18, d * Math.PI / 180);
+      ctx.fillText(Math.abs(d) + '°', p.x, p.y);
     }
-
-    // rotate handle
-    if (!prot.locked) {
-      const h = protScreen(R + 32, 0), e = protScreen(R, 0);
-      ctx.strokeStyle = INK; ctx.lineWidth = 3;
-      ctx.beginPath(); ctx.moveTo(e.x, e.y); ctx.lineTo(h.x, h.y); ctx.stroke();
-      ctx.beginPath(); ctx.arc(h.x, h.y, 16, 0, TAU);
-      ctx.fillStyle = '#fff'; ctx.fill(); ctx.lineWidth = 3.5; ctx.stroke();
-      ctx.lineWidth = 2.6;
-      ctx.beginPath(); ctx.arc(h.x, h.y, 7.5, -2.6, 1.4); ctx.stroke();
-      const ax = h.x + Math.cos(1.4) * 7.5, ay = h.y + Math.sin(1.4) * 7.5;
-      ctx.beginPath(); ctx.moveTo(ax - 5, ay - 1); ctx.lineTo(ax, ay); ctx.lineTo(ax + 1, ay - 5); ctx.stroke();
+    ctx.font = '700 17px Fredoka, ui-rounded, system-ui, sans-serif';
+    const m = at(R * 0.42 + 22, 0);
+    ctx.fillText('39°', m.x, m.y);
+    for (const sg of [-1, 1]) {
+      const p = at(R + 40, KELVIN * sg);
+      ctx.fillText('19.5°', p.x, p.y);
     }
   }
 
@@ -493,13 +485,14 @@
     drawWake(true);
     drawWake(false);
     drawBow();
-    drawProtractor();
+    drawScale();
     drawDuck();
   }
 
   // ---------- sound: water laps, drips, birds and paddling splashes ----------
   let audio = null;
-  let soundOn = true;
+  let wantSound = true;
+  const btnSound = document.getElementById('sound');
 
   function makeNoise(ac, brown) {
     const len = Math.floor(ac.sampleRate * 4);
@@ -513,26 +506,44 @@
     return buf;
   }
 
-  function startAudio() {
-    if (!soundOn) return;
-    if (audio) { if (audio.ac.state === 'suspended') audio.ac.resume(); return; }
+  function createAudio() {
     const AC = window.AudioContext || window.webkitAudioContext;
     if (!AC) return;
     const ac = new AC();
     const master = ac.createGain(); master.gain.value = 0; master.connect(ac.destination);
-    master.gain.setTargetAtTime(0.9, ac.currentTime, 1.0);
     const white = makeNoise(ac, false), brown = makeNoise(ac, true);
-
-    // very low, quiet water body underneath everything
     const bed = ac.createBufferSource(); bed.buffer = brown; bed.loop = true;
     const bedLP = ac.createBiquadFilter(); bedLP.type = 'lowpass'; bedLP.frequency.value = 160; bedLP.Q.value = 0.3;
     const bedG = ac.createGain(); bedG.gain.value = 0.05;
     bed.connect(bedLP).connect(bedG).connect(master); bed.start();
-
     const t = ac.currentTime;
-    audio = { ac, master, white, brown,
-      nextLap: t + 0.6, nextDrop: t + 1.5, nextBird: t + 4 + Math.random() * 5, nextPaddle: t };
+    audio = { ac, master, white, brown, nextLap: t + 0.6, nextDrop: t + 1.5, nextBird: t + 4 + Math.random() * 5, nextPaddle: t };
+    ac.onstatechange = syncSound;
   }
+
+  function syncSound() {
+    const on = !!(audio && wantSound && audio.ac.state === 'running');
+    btnSound.setAttribute('aria-pressed', String(on));
+    btnSound.textContent = on ? '🔊' : '🔇';
+    btnSound.setAttribute('aria-label', on ? 'Mute' : 'Unmute');
+    if (audio) audio.master.gain.setTargetAtTime(on ? 0.9 : 0, audio.ac.currentTime, on ? 0.8 : 0.2);
+  }
+
+  // Browsers only let sound start after a click, tap or key press.
+  function unlock() {
+    if (!wantSound) return;
+    if (!audio) createAudio();
+    if (audio && audio.ac.state !== 'running') audio.ac.resume().then(syncSound, () => {});
+    syncSound();
+  }
+  window.addEventListener('pointerdown', e => { if (e.target !== btnSound) unlock(); }, true);
+  window.addEventListener('keydown', unlock, true);
+
+  btnSound.addEventListener('click', () => {
+    const playing = audio && wantSound && audio.ac.state === 'running';
+    wantSound = !playing;
+    if (wantSound) unlock(); else syncSound();
+  });
 
   function panner(v) {
     const ac = audio.ac;
@@ -594,28 +605,8 @@
     }
   }
 
-  function quack() {
-    startAudio();
-    if (!audio || !soundOn) return;
-    const { ac, master } = audio, t = ac.currentTime;
-    const g = ac.createGain(); g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(0.3, t + 0.02);
-    g.gain.setValueAtTime(0.3, t + 0.11);
-    g.gain.exponentialRampToValueAtTime(0.001, t + 0.26);
-    const f1 = ac.createBiquadFilter(); f1.type = 'bandpass'; f1.frequency.value = 1050; f1.Q.value = 3;
-    const f2 = ac.createBiquadFilter(); f2.type = 'bandpass'; f2.frequency.value = 2300; f2.Q.value = 4;
-    const mix = ac.createGain(); mix.gain.value = 1.6;
-    f1.connect(mix); f2.connect(mix); mix.connect(g).connect(master);
-    for (const det of [0, 4]) {
-      const o = ac.createOscillator(); o.type = 'sawtooth';
-      o.frequency.setValueAtTime(560 + det, t);
-      o.frequency.exponentialRampToValueAtTime(390 + det, t + 0.24);
-      o.connect(f1); o.connect(f2); o.start(t); o.stop(t + 0.28);
-    }
-  }
-
   function audioTick() {
-    if (!audio || audio.ac.state !== 'running') return;
+    if (!audio || !wantSound || audio.ac.state !== 'running') return;
     const t = audio.ac.currentTime;
     if (t > audio.nextLap) { lap(); audio.nextLap = t + 1.4 + Math.random() * 2.6; }
     if (t > audio.nextDrop) {
@@ -624,7 +615,7 @@
       audio.nextDrop = t + 0.8 + Math.random() * 2.5;
     }
     if (t > audio.nextBird) { birds(); audio.nextBird = t + 8 + Math.random() * 14; }
-    const sp = frozen ? 0 : smooth(40, 650, duck.speed);
+    const sp = smooth(40, 650, duck.speed);
     if (sp > 0.03 && t > audio.nextPaddle) {
       const pan = (duck.x / Math.max(1, W)) * 1.2 - 0.6;
       burst(audio.white, t + 0.01, 0.12 + 0.06 * sp, 700 + 700 * sp, 1.0, 0.22 * sp, 0.006, pan);
@@ -632,83 +623,15 @@
     }
   }
 
-  function setSound(on) {
-    soundOn = on;
-    btnSound.setAttribute('aria-pressed', String(on));
-    btnSound.textContent = on ? '🔊' : '🔈';
-    if (on) startAudio();
-    if (audio) audio.master.gain.setTargetAtTime(on ? 0.9 : 0, audio.ac.currentTime, 0.25);
-  }
-
-  // ---------- input ----------
-  function updateCursor(x, y) {
-    if (mode) { canvas.style.cursor = mode === 'prot' ? 'move' : 'grabbing'; return; }
-    canvas.style.cursor = hitHandle(x, y) ? 'grab' : hitProt(x, y) ? 'move' : 'crosshair';
-  }
-
-  canvas.addEventListener('pointerdown', e => {
-    startAudio();
-    const x = e.clientX, y = e.clientY;
-    try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
-    if (hitHandle(x, y)) mode = 'rot';
-    else if (hitProt(x, y)) { mode = 'prot'; grab = { dx: prot.x - x, dy: prot.y - y }; }
-    else { mode = 'duck'; pointer.x = x; pointer.y = y; }
-    updateCursor(x, y);
-  });
-  canvas.addEventListener('pointermove', e => {
-    const x = e.clientX, y = e.clientY;
-    if (mode === 'duck') { pointer.x = x; pointer.y = y; }
-    else if (mode === 'prot') { prot.x = x + grab.dx; prot.y = y + grab.dy; }
-    else if (mode === 'rot') {
-      let r = Math.atan2(y - prot.y, x - prot.x);
-      if (e.shiftKey) r = Math.round(r / (Math.PI / 36)) * (Math.PI / 36);
-      prot.rot = r;
-    }
-    updateCursor(x, y);
-  });
-  const end = e => { mode = null; updateCursor(e.clientX, e.clientY); };
-  canvas.addEventListener('pointerup', end);
-  canvas.addEventListener('pointercancel', end);
-  canvas.addEventListener('wheel', e => {
-    if (!hitProt(e.clientX, e.clientY) && !hitHandle(e.clientX, e.clientY)) return;
-    e.preventDefault();
-    prot.rot += (e.deltaY > 0 ? 1 : -1) * (e.shiftKey ? 0.25 : 1) * Math.PI / 180;
-  }, { passive: false });
-  canvas.addEventListener('dblclick', e => {
-    if (hitProt(e.clientX, e.clientY)) return;
-    quack();
-    if (!frozen) addRing(duck.x, duck.y);
-  });
-
-  // ---------- buttons ----------
-  const btnProt = document.getElementById('btnProt');
-  const btnLock = document.getElementById('btnLock');
-  const btnFreeze = document.getElementById('btnFreeze');
-  const btnSound = document.getElementById('btnSound');
-
-  function setProt(on) { prot.visible = on; btnProt.setAttribute('aria-pressed', String(on)); btnLock.disabled = !on; }
-  function setLock(on) {
-    prot.locked = on; btnLock.setAttribute('aria-pressed', String(on));
-    if (!on) { prot.x = clamp(prot.x, 40, W - 40); prot.y = clamp(prot.y, 40, H - 40); }
-  }
-  function setFreeze(on) {
-    frozen = on; btnFreeze.setAttribute('aria-pressed', String(on));
-    btnFreeze.textContent = on ? '▶' : '⏸';
-  }
-  btnProt.onclick = () => { startAudio(); setProt(!prot.visible); };
-  btnLock.onclick = () => { startAudio(); setLock(!prot.locked); };
-  btnFreeze.onclick = () => { startAudio(); setFreeze(!frozen); };
-  btnSound.onclick = () => setSound(!soundOn);
-
-  window.addEventListener('keydown', e => {
-    if (e.target && e.target.tagName === 'BUTTON' && (e.key === ' ' || e.key === 'Enter')) return;
-    const k = e.key.toLowerCase();
-    if (k === ' ') { e.preventDefault(); setFreeze(!frozen); }
-    else if (k === 'p') setProt(!prot.visible);
-    else if (k === 'l') setLock(!prot.locked);
-    else if (k === 'm') setSound(!soundOn);
-    else if (k === 'q') quack();
-  });
+  // ---------- input: the duck follows the pointer, no clicking needed ----------
+  const follow = e => { pointer.x = e.clientX; pointer.y = e.clientY; pointer.active = true; };
+  canvas.addEventListener('pointermove', follow);
+  canvas.addEventListener('pointerdown', follow);
+  canvas.addEventListener('pointerup', e => { if (e.pointerType !== 'mouse') pointer.active = false; });
+  canvas.addEventListener('pointercancel', () => { pointer.active = false; });
+  document.addEventListener('pointerleave', () => { pointer.active = false; });
+  document.documentElement.addEventListener('mouseleave', () => { pointer.active = false; });
+  window.addEventListener('blur', () => { pointer.active = false; });
 
   // ---------- loop ----------
   window.addEventListener('resize', resize);
@@ -717,7 +640,9 @@
   function frame(now) {
     const dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
     last = now; clock += dt;
-    if (!frozen) { simT += dt; updateDuck(dt); }
+    boil = Math.floor(clock * 6);
+    simT += dt;
+    updateDuck(dt);
     computeWake();
     render();
     audioTick();

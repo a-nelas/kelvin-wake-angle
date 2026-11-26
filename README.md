@@ -1,17 +1,15 @@
 # Kelvin Wake Duck 🦆
 
-A cartoon simulator for the **Kelvin wake angle**. Drag anywhere to lead the duck around the lake. Swim fast or slow: the V-shaped wake always opens at the same half-angle, arcsin(1/3) ≈ **19.47°**.
+A cartoon simulator for the **Kelvin wake angle**. Move the pointer and the duck follows it around the lake. Swim fast or slow: the V-shaped wake always opens at the same half-angle, arcsin(1/3) ≈ **19.47°**.
 
 **Live:** https://a-nelas.github.io/kelvin-wake-angle/
 
 ## Controls
 
-- **Drag**: the duck follows your pointer
-- **📐** (P): show or hide the wedge protractor
-- **📌** (L): pin the protractor to the duck, or unpin it to drag it. Turn it with the round handle or the mouse wheel (hold Shift for fine steps)
-- **⏸** (Space): freeze the water so you can measure
-- **🔊** (M): lake sounds (water laps, drips, birds, paddling), made live with the Web Audio API
-- **Double-click** or **Q**: quack
+- **Move the pointer** (or touch and drag): the duck swims after it
+- **🔊 / 🔇**: lake sounds on or off. Browsers start sound only after a click, tap or key press
+
+A white angle scale rides along behind the duck. It marks the wake's edges at 19.5° on each side, a 39° opening in total.
 
 ## How the wake is drawn
 
