@@ -53,7 +53,6 @@
   const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
   const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
   const angDiff = (a, b) => { let d = (b - a) % TAU; if (d > Math.PI) d -= TAU; if (d < -Math.PI) d += TAU; return d; };
-  const hash = (a, b) => { const s = Math.sin(a * 127.1 + b * 311.7) * 43758.5453; return s - Math.floor(s); };
 
   // ---------- wake physics ----------
   // Deep-water waves: phase speed c = sqrt(g/k), group speed c/2. A source moving at U makes
@@ -147,8 +146,9 @@
     if (duck.y < m) { duck.y = m; duck.vy = Math.abs(duck.vy) * 0.3; }
     if (duck.y > H - m) { duck.y = H - m; duck.vy = -Math.abs(duck.vy) * 0.3; }
     duck.speed = Math.hypot(duck.vx, duck.vy);
-    if (duck.speed > 6) {
-      duck.heading += angDiff(duck.heading, Math.atan2(duck.vy, duck.vx)) * (1 - Math.exp(-dt * 9));
+    // turn only when really swimming, so the duck does not spin when it reaches the pointer
+    if (duck.speed > 12) {
+      duck.heading += angDiff(duck.heading, Math.atan2(duck.vy, duck.vx)) * (1 - Math.exp(-dt * 9)) * smooth(12, 70, duck.speed);
     }
 
     const u = duck.speed;
@@ -289,60 +289,39 @@
     ctx.restore();
   }
 
-  // ---------- hand-drawn helpers ----------
-  // Outlines wobble a little, vary in thickness, overshoot where they close, and the fill sits
-  // slightly off the line. The wobble re-rolls a few times a second like a hand-animated "boil".
-  let boil = 0;
-
-  function sketchLine(pts, seed, base) {
-    // smooth curve through pts, stroked in short pieces with varying width
-    const n = pts.length;
-    if (n < 2) return;
-    const p1 = hash(seed, boil) * TAU, p2 = hash(seed + 3, boil) * TAU;
-    let prev = pts[0];
-    for (let i = 1; i < n; i++) {
-      const t = i / (n - 1);
-      ctx.lineWidth = base * (1 + 0.28 * Math.sin(t * 5 + p1) + 0.14 * Math.sin(t * 11 + p2));
-      ctx.beginPath(); ctx.moveTo(prev.x, prev.y); ctx.lineTo(pts[i].x, pts[i].y); ctx.stroke();
-      prev = pts[i];
-    }
-  }
-
-  function wobbleEllipsePts(e, seed, from, to, n, amp) {
-    const ph = [hash(seed, boil) * TAU, hash(seed + 1, boil) * TAU, hash(seed + 2, boil) * TAU];
-    const ca = Math.cos(e.ang), sa = Math.sin(e.ang);
-    const pts = [];
-    for (let i = 0; i <= n; i++) {
-      const t = from + (to - from) * i / n;
-      const off = amp * (0.6 * Math.sin(2 * t + ph[0]) + 0.4 * Math.sin(3 * t + ph[1]) + 0.25 * Math.sin(5 * t + ph[2]));
-      const lx = (e.rx + off) * Math.cos(t), ly = (e.ry + off) * Math.sin(t);
-      pts.push({ x: e.x + lx * ca - ly * sa, y: e.y + lx * sa + ly * ca });
-    }
-    return pts;
-  }
-
-  function sketchBlob(e, fill, seed) {
-    const amp = Math.min(2.2, 0.08 * Math.min(e.rx, e.ry) + 0.8);
-    // fill, nudged off the outline
-    const fp = wobbleEllipsePts(e, seed + 10, 0, TAU, 36, amp);
-    ctx.beginPath();
-    ctx.moveTo(fp[0].x + 1.6, fp[0].y + 1.2);
-    for (const p of fp) ctx.lineTo(p.x + 1.6, p.y + 1.2);
-    ctx.closePath();
-    ctx.fillStyle = fill; ctx.fill();
-    // outline with a little overshoot past the start
-    const start = hash(seed, 7) * TAU;
-    ctx.strokeStyle = INK;
-    sketchLine(wobbleEllipsePts(e, seed, start, start + TAU + 0.35, 48, amp), seed, 5);
-  }
-
   // ---------- duck (3/4 view) ----------
   // The water is drawn straight down so angles measure true; the duck is drawn
   // from a camera tilted CAM above the horizon so it reads as a floating toy.
-  const CAM = 48 * Math.PI / 180;
+  // Body and head are a union of ellipsoids: every piece is stroked thick first and
+  // filled after, which leaves one clean outline around the whole shape.
+  const CAM = 46 * Math.PI / 180;
   const SINC = Math.sin(CAM), COSC = Math.cos(CAM);
   const YELLOW = '#fbe27a', ORANGE = '#f7a13b';
-  const WING = [[48, 28], [72, 40], [102, 42], [128, 32], [142, 15], [137, 0], [120, -7], [100, -4]];
+  const LINE = 5;
+
+  // side profile of the body: forward f, height u, semi-axes a (length), b (width), c (height)
+  const BODY_KEYS = [
+    [22, 15, 17, 21, 18],   // chest
+    [4, 14, 22, 28, 21],    // middle
+    [-16, 17, 19, 25, 19],  // rear
+    [-31, 26, 11, 14, 11],  // tail base
+    [-45, 41, 3, 3.5, 3],   // tail tip, raised
+  ];
+  const BODY = [];
+  for (let k = 0; k < BODY_KEYS.length - 1; k++) {
+    const A = BODY_KEYS[k], B = BODY_KEYS[k + 1];
+    const steps = k < 2 ? 2 : 5;
+    for (let i = 0; i < steps; i++) {
+      const t = i / steps;
+      BODY.push(A.map((v, j) => v + (B[j] - v) * t));
+    }
+  }
+  BODY.push(BODY_KEYS[BODY_KEYS.length - 1]);
+  const HEAD = { f: 25, u: 45, r: 19 };
+  // wing: a "U" curl on the side of the body, given as (longitude, latitude) in degrees
+  // on an envelope ellipsoid around the body
+  const WING_ENV = { f: -2, u: 16, a: 36, b: 27.5, c: 20 };
+  const WING = [[122, 30], [134, 12], [128, -6], [108, -15], [84, -12], [68, 0], [64, 10]];
 
   function drawDuck() {
     const sp = clamp(duck.speed / 600, 0, 1);
@@ -369,60 +348,74 @@
       const c0 = P(cf, cs, cu);
       return { x: c0.x, y: c0.y, d: c0.d, rx: Math.sqrt(m + dd), ry: Math.sqrt(Math.max(0.01, m - dd)), ang: 0.5 * Math.atan2(2 * q, p - r) };
     };
+    const path = e => { ctx.beginPath(); ctx.ellipse(e.x, e.y, e.rx, e.ry, e.ang, 0, TAU); };
 
     ctx.save();
     ctx.translate(duck.x, duck.y); ctx.scale(1.25, 1.25); ctx.translate(-duck.x, -duck.y);
     ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    ctx.strokeStyle = INK;
 
-    // shadow on the water
+    // soft shadow on the water
     {
-      const e = ell(-4, 0, -bob, 50, 36, 0.1, 0);
-      ctx.beginPath(); ctx.ellipse(e.x + 5, e.y + 8, e.rx, e.ry, e.ang, 0, TAU);
+      const e = ell(-6, 0, -bob, 54, 36, 0.1, 0);
+      path({ ...e, x: e.x + 6, y: e.y + 9 });
       ctx.fillStyle = 'rgba(40,118,190,0.4)'; ctx.fill();
     }
 
-    const BODY = { cf: 0, cu: 12, a: 40, b: 28, c: 22 };
-    const HEAD = { cf: 25, cu: 42, r: 18 };
-    const parts = [
-      {
-        e: ell(BODY.cf, 0, BODY.cu, BODY.a, BODY.b, BODY.c, 0), fill: YELLOW, seed: 1,
-        after() {
-          ctx.strokeStyle = INK;
-          for (const sg of [-1, 1]) {
-            let run = [];
-            const flush = () => { if (run.length > 1) sketchLine(run, 20 + sg, 4.6); run = []; };
-            WING.forEach(([lonD, latD], i) => {
-              const lon = lonD * Math.PI / 180, lat = latD * Math.PI / 180;
-              const cl = Math.cos(lat);
-              const nf = cl * Math.cos(lon) / BODY.a, ns = sg * cl * Math.sin(lon) / BODY.b, nu = Math.sin(lat) / BODY.c;
-              const pt = P(BODY.cf + BODY.a * cl * Math.cos(lon), sg * BODY.b * cl * Math.sin(lon), BODY.cu + BODY.c * Math.sin(lat));
-              pt.x += (hash(i + sg * 5, boil) - 0.5) * 1.6; pt.y += (hash(i + sg * 9, boil + 1) - 0.5) * 1.6;
-              if (facing(nf, ns, nu) > 0) run.push(pt); else flush();
-            });
-            flush();
-          }
-        }
-      },
-      { e: ell(-36, 0, 26, 15, 10, 8, -0.6), fill: YELLOW, seed: 2 },
-      {
-        e: ell(HEAD.cf, 0, HEAD.cu, HEAD.r, HEAD.r, HEAD.r, 0), fill: YELLOW, seed: 3,
-        after() {
-          for (const sg of [-1, 1]) {
-            let nf = 0.55, ns = 0.62 * sg, nu = 0.42;
-            const l = Math.hypot(nf, ns, nu); nf /= l; ns /= l; nu /= l;
-            if (facing(nf, ns, nu) < 0.1) continue;
-            const pt = P(HEAD.cf + HEAD.r * nf, HEAD.r * ns, HEAD.cu + HEAD.r * nu);
-            ctx.fillStyle = INK;
-            ctx.beginPath(); ctx.ellipse(pt.x, pt.y, 3.4, 4.2, 0.2 * sg, 0, TAU); ctx.fill();
-            ctx.fillStyle = '#fff';
-            ctx.beginPath(); ctx.arc(pt.x + 1.1, pt.y - 1.5, 1.1, 0, TAU); ctx.fill();
-          }
-        }
-      },
-      { e: ell(43, 0, 38, 11, 9, 4.5, -0.1), fill: ORANGE, seed: 4 },
-    ];
-    parts.sort((p1, p2) => p1.e.d - p2.e.d);
-    for (const p of parts) { sketchBlob(p.e, p.fill, p.seed); if (p.after) p.after(); }
+    const body = BODY.map(([f, u, a, b, c]) => ell(f, 0, u, a, b, c, 0));
+    const head = ell(HEAD.f, 0, HEAD.u, HEAD.r, HEAD.r, HEAD.r, 0);
+    const beak = ell(HEAD.f + 21, 0, HEAD.u - 4, 14, 10, 6, -0.15);
+    const beakInFront = beak.d > head.d;
+
+    const drawBeak = () => {
+      path(beak); ctx.fillStyle = ORANGE; ctx.fill();
+      ctx.lineWidth = LINE - 0.5; ctx.stroke();
+    };
+    if (!beakInFront) drawBeak();
+
+    // one outline around body + head
+    const union = body.concat([head]);
+    ctx.lineWidth = LINE * 2;
+    for (const e of union) { path(e); ctx.stroke(); }
+    ctx.fillStyle = YELLOW;
+    for (const e of union) { path(e); ctx.fill(); }
+
+    ctx.lineWidth = LINE;
+    // wing curl on whichever sides face the camera
+    for (const sg of [-1, 1]) {
+      let open = false;
+      for (const [lonD, latD] of WING) {
+        const lon = lonD * Math.PI / 180, lat = latD * Math.PI / 180, cl = Math.cos(lat);
+        const E = WING_ENV;
+        const vis = facing(cl * Math.cos(lon) / E.a, sg * cl * Math.sin(lon) / E.b, Math.sin(lat) / E.c) > 0;
+        const p = P(E.f + E.a * cl * Math.cos(lon), sg * E.b * cl * Math.sin(lon), E.u + E.c * Math.sin(lat));
+        if (vis) {
+          if (!open) { ctx.beginPath(); ctx.moveTo(p.x, p.y); open = true; }
+          else ctx.lineTo(p.x, p.y);
+        } else if (open) { ctx.stroke(); open = false; }
+      }
+      if (open) ctx.stroke();
+    }
+
+    // back of the head, where it sits on the body
+    {
+      const rear = P(-10, 0, 20);
+      const dir = Math.atan2(rear.y - head.y, rear.x - head.x);
+      ctx.beginPath(); ctx.arc(head.x, head.y, head.rx, dir - 1.15, dir + 1.15); ctx.stroke();
+    }
+
+    // eyes
+    ctx.fillStyle = INK;
+    for (const sg of [-1, 1]) {
+      let nf = 0.5, ns = 0.66 * sg, nu = 0.36;
+      const l = Math.hypot(nf, ns, nu); nf /= l; ns /= l; nu /= l;
+      const v = facing(nf, ns, nu);
+      if (v < 0.12) continue;
+      const p = P(HEAD.f + HEAD.r * nf, HEAD.r * ns, HEAD.u + HEAD.r * nu);
+      ctx.beginPath(); ctx.ellipse(p.x, p.y, 3.4, 4.2, 0, 0, TAU); ctx.fill();
+    }
+
+    if (beakInFront) drawBeak();
     ctx.restore();
   }
 
@@ -640,7 +633,6 @@
   function frame(now) {
     const dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
     last = now; clock += dt;
-    boil = Math.floor(clock * 6);
     simT += dt;
     updateDuck(dt);
     computeWake();
