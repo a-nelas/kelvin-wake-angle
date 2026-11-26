@@ -31,14 +31,14 @@
     transition: transform .06s, box-shadow .06s;
     user-select: none; -webkit-user-select: none;
   }
-  #sound[aria-pressed="true"] { background: var(--yellow); }
+  #sound svg { width: 24px; height: 24px; display: block; }
   #sound:active { transform: translate(2px, 3px); box-shadow: 0 0 0 var(--ink); }
   #sound:focus-visible { outline: 3px solid #2f7fd0; outline-offset: 2px; }
 </style>
 </head>
 <body>
 <canvas id="lake" aria-label="Lake with a duck that follows the pointer and leaves a wake."></canvas>
-<button id="sound" aria-pressed="false" aria-label="Sound">🔇</button>
+<button id="sound" aria-pressed="false" aria-label="Unmute"></button>
 
 <script>
 (() => {
@@ -416,7 +416,7 @@
   // ---------- angle scale ----------
   // A small white scale pinned to the duck that spans only the wake's 39° opening.
   // Outside the arc: half-angle from the centre line (0 → 19.5° each way).
-  // Inside the arc: full opening from one edge to the other (0 → 39°).
+  // Inside the arc: the full opening, 39°.
   function drawScale() {
     const R = scaleR;
     const rot = duck.heading + Math.PI;
@@ -450,9 +450,6 @@
     // outer ticks: half-angle from the centre line
     for (let d = -19; d <= 19; d++) tick(d * DEG, R, R + (d % 5 === 0 ? 12 : 6), d % 5 === 0 ? 2.6 : 1.6);
     for (const sg of [-1, 1]) tick(K * sg, R, R + 14, 3);
-    // inner ticks: full opening measured from the left edge
-    for (let v = 0; v <= 38; v++) tick(-K + v * DEG, R, R - (v % 5 === 0 ? 12 : 6), v % 5 === 0 ? 2.6 : 1.6);
-    tick(K, R, R - 14, 3);
 
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
     ctx.font = '600 12px Fredoka, ui-rounded, system-ui, sans-serif';
@@ -460,19 +457,15 @@
       const p = at(R + 22, d * DEG);
       ctx.fillText(Math.abs(d) + '°', p.x, p.y);
     }
-    for (const v of [10, 20, 30]) {
-      const p = at(R - 22, -K + v * DEG);
-      ctx.fillText(v + '°', p.x, p.y);
-    }
     ctx.font = '700 13px Fredoka, ui-rounded, system-ui, sans-serif';
     for (const sg of [-1, 1]) {
       const p = at(R + 26, K * sg + sg * 3 * DEG);
       ctx.fillText('19.5°', p.x, p.y);
     }
     {
-      const p0 = at(R - 24, -K - 3 * DEG), p1 = at(R - 24, K + 3 * DEG);
-      ctx.fillText('0°', p0.x, p0.y);
-      ctx.fillText('39°', p1.x, p1.y);
+      ctx.font = '700 15px Fredoka, ui-rounded, system-ui, sans-serif';
+      const p = at(R - 24, 0);
+      ctx.fillText('39°', p.x, p.y);
     }
   }
 
@@ -490,6 +483,10 @@
   let audio = null;
   let wantSound = true;
   const btnSound = document.getElementById('sound');
+  const ICON_BASE = '<svg viewBox="0 0 24 24" fill="none" stroke="#151515" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z" fill="#151515"/>';
+  const ICON_ON = ICON_BASE + '<path d="M15.5 9a4 4 0 0 1 0 6"/><path d="M18.5 6.5a7.5 7.5 0 0 1 0 11"/></svg>';
+  const ICON_OFF = ICON_BASE + '<path d="M16 9.5l5 5M21 9.5l-5 5"/></svg>';
+  btnSound.innerHTML = ICON_OFF;
 
   function makeNoise(ac, brown) {
     const len = Math.floor(ac.sampleRate * 4);
@@ -521,7 +518,7 @@
   function syncSound() {
     const on = !!(audio && wantSound && audio.ac.state === 'running');
     btnSound.setAttribute('aria-pressed', String(on));
-    btnSound.textContent = on ? '🔊' : '🔇';
+    btnSound.innerHTML = on ? ICON_ON : ICON_OFF;
     btnSound.setAttribute('aria-label', on ? 'Mute' : 'Unmute');
     if (audio) audio.master.gain.setTargetAtTime(on ? 0.9 : 0, audio.ac.currentTime, on ? 0.8 : 0.2);
   }
