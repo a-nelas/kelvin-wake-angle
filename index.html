@@ -91,7 +91,8 @@
   const duck = { x: 0, y: 0, vx: 0, vy: 0, heading: 0, speed: 0 };
   const pointer = { x: 0, y: 0, active: false };
 
-  let scaleR = 400;
+  let scaleR = 400;        // largest the scale gets
+  let scaleCur = 0;        // current radius, follows the straight part of the wake
   let scaleAlpha = 1;
   const rings = [];
   let lastRing = 0;
@@ -420,8 +421,29 @@
     ctx.restore();
   }
 
+  // How far back the duck has swum in a straight line. On a straight run the wake's arms
+  // reach out to about 0.7× that distance from the duck (the cusp of the crest launched at
+  // the start of the run), so beyond that the 19.5° lines no longer describe the wake.
+  function straightRun() {
+    const hx = Math.cos(duck.heading), hy = Math.sin(duck.heading);
+    let len = 0;
+    for (let i = hist.length - 1; i > 0; i--) {
+      const h = hist[i], p = hist[i - 1];
+      if (h.u < 60 || h.dx * hx + h.dy * hy < 0.985) break;   // speed too low or turned > 10°
+      len += Math.hypot(h.x - p.x, h.y - p.y);
+    }
+    return len;
+  }
+
+  function updateScale(dt) {
+    const target = Math.min(scaleR, 0.7 * straightRun());
+    scaleCur += (target - scaleCur) * (1 - Math.exp(-dt * (target < scaleCur ? 7 : 3)));
+    const want = smooth(25, 140, duck.speed) * smooth(45, 100, scaleCur);
+    scaleAlpha += (want - scaleAlpha) * (1 - Math.exp(-dt * 3));
+  }
+
   function drawScaleMarks() {
-    const R = scaleR;
+    const R = scaleCur;
     const rot = duck.heading + Math.PI;
     const cr = Math.cos(rot), sr = Math.sin(rot);
     const at = (r, a) => {
@@ -482,9 +504,8 @@
     drawDuck();
   }
 
-  // ---------- sound: soft lake swell, laps, drips, birds and paddling ----------
-  // Everything is dark-filtered noise with slow fades, passed through a gentle low-pass,
-  // a soft compressor and a small generated reverb, so nothing sounds sharp or hissy.
+  // ---------- sound: cartoon plops, bubbles, paddle plips and birds ----------
+  // Only short pitched tones (no noise), softened by a gentle low-pass and a small reverb.
   let audio = null;
   let wantSound = true;
   const btnSound = document.getElementById('sound');
@@ -493,38 +514,15 @@
   const ICON_OFF = ICON_BASE + '<path d="M16 9.5l5 5M21 9.5l-5 5"/></svg>';
   btnSound.innerHTML = ICON_OFF;
 
-  function makeNoise(ac, kind) {
-    const len = Math.floor(ac.sampleRate * 6);
-    const buf = ac.createBuffer(1, len, ac.sampleRate);
-    const d = buf.getChannelData(0);
-    if (kind === 'brown') {
-      let last = 0;
-      for (let i = 0; i < len; i++) { last = (last + 0.02 * (Math.random() * 2 - 1)) / 1.02; d[i] = last * 3.5; }
-    } else { // pink
-      let b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
-      for (let i = 0; i < len; i++) {
-        const w = Math.random() * 2 - 1;
-        b0 = 0.99886 * b0 + w * 0.0555179; b1 = 0.99332 * b1 + w * 0.0750759;
-        b2 = 0.969 * b2 + w * 0.153852; b3 = 0.8665 * b3 + w * 0.3104856;
-        b4 = 0.55 * b4 + w * 0.5329522; b5 = -0.7616 * b5 - w * 0.016898;
-        d[i] = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + w * 0.5362) * 0.11; b6 = w * 0.115926;
-      }
-    }
-    // blend the end into the start so loops have no click
-    const fade = Math.floor(ac.sampleRate * 0.1);
-    for (let i = 0; i < fade; i++) { const t = i / fade; d[len - fade + i] = d[len - fade + i] * (1 - t) + d[i] * t; }
-    return buf;
-  }
-
   function makeReverb(ac) {
-    const len = Math.floor(ac.sampleRate * 2.4);
+    const len = Math.floor(ac.sampleRate * 1.8);
     const ir = ac.createBuffer(2, len, ac.sampleRate);
     for (let ch = 0; ch < 2; ch++) {
       const d = ir.getChannelData(ch);
       let lp = 0;
       for (let i = 0; i < len; i++) {
-        lp += (Math.random() * 2 - 1 - lp) * 0.3;          // darker tail
-        d[i] = lp * Math.pow(1 - i / len, 3);
+        lp += (Math.random() * 2 - 1 - lp) * 0.3;
+        d[i] = lp * Math.pow(1 - i / len, 3.5);
       }
     }
     const conv = ac.createConvolver(); conv.buffer = ir;
@@ -536,26 +534,18 @@
     if (!AC) return;
     const ac = new AC();
     const out = ac.createGain(); out.gain.value = 0;
-    const tone = ac.createBiquadFilter(); tone.type = 'lowpass'; tone.frequency.value = 2000; tone.Q.value = 0.4;
+    const tone = ac.createBiquadFilter(); tone.type = 'lowpass'; tone.frequency.value = 4500; tone.Q.value = 0.4;
     const comp = ac.createDynamicsCompressor();
-    comp.threshold.value = -22; comp.ratio.value = 3; comp.attack.value = 0.03; comp.release.value = 0.5;
+    comp.threshold.value = -20; comp.ratio.value = 3; comp.attack.value = 0.01; comp.release.value = 0.3;
     out.connect(tone).connect(comp).connect(ac.destination);
     const bus = ac.createGain();
-    const dry = ac.createGain(); dry.gain.value = 0.75;
-    const verb = makeReverb(ac), wet = ac.createGain(); wet.gain.value = 0.3;
+    const dry = ac.createGain(); dry.gain.value = 0.8;
+    const verb = makeReverb(ac), wet = ac.createGain(); wet.gain.value = 0.25;
     bus.connect(dry).connect(out);
     bus.connect(verb).connect(wet).connect(out);
-
-    const brown = makeNoise(ac, 'brown'), pink = makeNoise(ac, 'pink');
-    // the lake breathing: very low swell
-    const bed = ac.createBufferSource(); bed.buffer = brown; bed.loop = true;
-    const bedLP = ac.createBiquadFilter(); bedLP.type = 'lowpass'; bedLP.frequency.value = 240; bedLP.Q.value = 0.3;
-    const bedG = ac.createGain(); bedG.gain.value = 0.05;
-    bed.connect(bedLP).connect(bedG).connect(bus); bed.start(0, Math.random() * 4);
-
     const t = ac.currentTime;
-    audio = { ac, out, bus, brown, pink, bedG, bedLP,
-      nextLap: t + 0.8, nextDrop: t + 2, nextBird: t + 5 + Math.random() * 5, nextPaddle: t };
+    audio = { ac, out, bus, foot: 0,
+      nextPlop: t + 0.8, nextBubbles: t + 4 + Math.random() * 4, nextBird: t + 3 + Math.random() * 4, nextPaddle: t };
     ac.onstatechange = syncSound;
   }
 
@@ -564,7 +554,7 @@
     btnSound.setAttribute('aria-pressed', String(on));
     btnSound.innerHTML = on ? ICON_ON : ICON_OFF;
     btnSound.setAttribute('aria-label', on ? 'Mute' : 'Unmute');
-    if (audio) audio.out.gain.setTargetAtTime(on ? 1 : 0, audio.ac.currentTime, on ? 1.0 : 0.2);
+    if (audio) audio.out.gain.setTargetAtTime(on ? 1 : 0, audio.ac.currentTime, on ? 0.6 : 0.15);
   }
 
   // Browsers only let sound start after a click, tap or key press.
@@ -589,42 +579,40 @@
     return ac.createGain();
   }
 
-  // a soft noise swell: slow linear rise, smooth exponential fade
-  function swell(buf, when, { lp, bp = 0, q = 0.7, peak, attack, decay, pan = 0 }) {
+  // One cartoon blip: a sine whose pitch glides from f0 to f1, with a quick pop of volume.
+  function blip(when, f0, f1, glide, gain, len, pan = 0, type = 'sine') {
     const { ac, bus } = audio;
-    const s = ac.createBufferSource(); s.buffer = buf;
-    let node = s;
-    if (bp) { const f = ac.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = bp; f.Q.value = q; node = node.connect(f); }
-    const l = ac.createBiquadFilter(); l.type = 'lowpass'; l.frequency.value = lp; l.Q.value = 0.3;
+    const o = ac.createOscillator(); o.type = type;
+    o.frequency.setValueAtTime(f0, when);
+    o.frequency.exponentialRampToValueAtTime(f1, when + glide);
     const g = ac.createGain();
     g.gain.setValueAtTime(0, when);
-    g.gain.linearRampToValueAtTime(peak, when + attack);
-    g.gain.setTargetAtTime(0, when + attack, decay / 4);
-    node.connect(l).connect(g).connect(panner(pan)).connect(bus);
-    s.start(when, Math.random() * 3, attack + decay + 0.2);
+    g.gain.linearRampToValueAtTime(gain, when + 0.006);
+    g.gain.setTargetAtTime(0, when + 0.006, len / 4);
+    o.connect(g).connect(panner(pan)).connect(bus);
+    o.start(when); o.stop(when + len + 0.05);
   }
 
-  function lap() {
-    const t = audio.ac.currentTime + 0.05;
-    const pan = Math.random() * 1.0 - 0.5;
-    swell(audio.brown, t, { lp: 380 + Math.random() * 220, peak: 0.16 + Math.random() * 0.08,
-      attack: 0.6 + Math.random() * 0.5, decay: 1.6 + Math.random() * 0.8, pan });
-    // a whisper of wash on top of the swell
-    swell(audio.pink, t + 0.3, { lp: 900, bp: 500, q: 0.5, peak: 0.025, attack: 0.5, decay: 1.2, pan });
+  // "plop": a drop landing; a low bloop sometimes follows
+  function plop() {
+    const t = audio.ac.currentTime + 0.02;
+    const f = 420 + Math.random() * 380;
+    const pan = Math.random() * 1.4 - 0.7;
+    blip(t, f, f * 2.2, 0.07, 0.06, 0.12, pan);
+    if (Math.random() < 0.4) blip(t + 0.09, f * 0.6, f * 0.35, 0.12, 0.035, 0.16, pan);
   }
 
-  function drop() {
-    const { ac, bus } = audio, t = ac.currentTime + 0.02;
-    const o = ac.createOscillator(); o.type = 'sine';
-    const f = 260 + Math.random() * 260;
-    o.frequency.setValueAtTime(f, t);
-    o.frequency.exponentialRampToValueAtTime(f * 1.7, t + 0.09);
-    const g = ac.createGain();
-    g.gain.setValueAtTime(0, t);
-    g.gain.linearRampToValueAtTime(0.02, t + 0.012);
-    g.gain.setTargetAtTime(0, t + 0.012, 0.035);
-    o.connect(g).connect(panner(Math.random() * 1.4 - 0.7)).connect(bus);
-    o.start(t); o.stop(t + 0.25);
+  // a little string of rising bubbles
+  function bubbles() {
+    let t = audio.ac.currentTime + 0.02;
+    const pan = Math.random() * 1.2 - 0.6;
+    const n = 3 + Math.floor(Math.random() * 4);
+    let f = 600 + Math.random() * 300;
+    for (let i = 0; i < n; i++) {
+      blip(t, f, f * 1.8, 0.05, 0.03, 0.07, pan);
+      f *= 1.08 + Math.random() * 0.12;
+      t += 0.06 + Math.random() * 0.07;
+    }
   }
 
   function birds() {
@@ -652,19 +640,17 @@
   function audioTick() {
     if (!audio || !wantSound || audio.ac.state !== 'running') return;
     const t = audio.ac.currentTime;
-    const breath = 0.5 + 0.3 * Math.sin(t * 0.21) + 0.2 * Math.sin(t * 0.53 + 1.7);
-    audio.bedG.gain.setTargetAtTime(0.035 + 0.035 * breath, t, 0.6);
-    audio.bedLP.frequency.setTargetAtTime(200 + 90 * breath, t, 0.6);
-    if (t > audio.nextLap) { lap(); audio.nextLap = t + 2.2 + Math.random() * 2.8; }
-    if (t > audio.nextDrop) { drop(); audio.nextDrop = t + 1.6 + Math.random() * 3.5; }
-    if (t > audio.nextBird) { birds(); audio.nextBird = t + 9 + Math.random() * 14; }
-    // paddling: slow soft swishes that come faster as the duck speeds up
+    if (t > audio.nextPlop) { plop(); audio.nextPlop = t + 1.2 + Math.random() * 2.8; }
+    if (t > audio.nextBubbles) { bubbles(); audio.nextBubbles = t + 6 + Math.random() * 8; }
+    if (t > audio.nextBird) { birds(); audio.nextBird = t + 7 + Math.random() * 11; }
+    // paddling: left-right "plip-plop" that speeds up with the duck
     const sp = smooth(40, 650, duck.speed);
     if (sp > 0.04 && t > audio.nextPaddle) {
-      const pan = (duck.x / Math.max(1, W)) * 1.0 - 0.5;
-      swell(audio.pink, t + 0.02, { lp: 900, bp: 420 + 260 * sp, q: 0.6, peak: 0.07 * sp,
-        attack: 0.05, decay: 0.35, pan });
-      audio.nextPaddle = t + (0.85 + Math.random() * 0.3) / (1.6 + 2.2 * sp);
+      audio.foot ^= 1;
+      const pan = (duck.x / Math.max(1, W)) * 1.0 - 0.5 + (audio.foot ? 0.15 : -0.15);
+      const f = (audio.foot ? 330 : 280) * (1 + 0.25 * sp) * (0.96 + Math.random() * 0.08);
+      blip(t + 0.01, f, f * 1.9, 0.05, 0.03 + 0.04 * sp, 0.09, pan);
+      audio.nextPaddle = t + (0.9 + Math.random() * 0.2) / (2 + 3 * sp);
     }
   }
 
@@ -688,7 +674,7 @@
     simT += dt;
     updateDuck(dt);
     // the scale shows while the duck swims and fades away once it stops
-    scaleAlpha += (smooth(25, 140, duck.speed) - scaleAlpha) * (1 - Math.exp(-dt * 2.5));
+    updateScale(dt);
     computeWake();
     render();
     audioTick();
