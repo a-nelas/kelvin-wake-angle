@@ -9,7 +9,7 @@ A cartoon simulator for the **Kelvin wake angle**. Move the pointer and the duck
 - **Move the pointer** (or touch and drag): the duck swims after it
 - **🔊 / 🔇**: lake sounds on or off. Browsers start sound only after a click, tap or key press
 
-A white angle scale rides along behind the duck. It marks the wake's edges at 19.5° on each side, a 39° opening in total.
+A small white scale rides along behind the duck and spans only the wake's 39° opening. The outer side counts the half-angle from the centre line (0 → 19.5° each way). The inner side counts the full opening from edge to edge (0 → 39°).
 
 ## How the wake is drawn
 

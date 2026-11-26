@@ -105,14 +105,14 @@
     W = window.innerWidth; H = window.innerHeight;
     canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-    scaleR = clamp(Math.max(W, H) * 0.4, 230, 560);
+    scaleR = clamp(Math.min(W, H) * 0.45, 180, 250);
     if (first) init();
     duck.x = clamp(duck.x, 30, W - 30); duck.y = clamp(duck.y, 30, H - 30);
   }
 
   function init() {
-    const U0 = 380;
-    duck.x = W * 0.55; duck.y = H * 0.55;
+    const U0 = clamp(W * 0.5 * 0.55, 150, 380);
+    duck.x = W * 0.3; duck.y = H * 0.55;
     duck.vx = U0; duck.vy = -U0 * 0.1; duck.heading = Math.atan2(duck.vy, duck.vx);
     const dx = Math.cos(duck.heading), dy = Math.sin(duck.heading);
     const s = sample(U0);
@@ -141,10 +141,10 @@
     }
     duck.x += duck.vx * dt; duck.y += duck.vy * dt;
     const m = 30;
-    if (duck.x < m) { duck.x = m; duck.vx = Math.abs(duck.vx) * 0.3; }
-    if (duck.x > W - m) { duck.x = W - m; duck.vx = -Math.abs(duck.vx) * 0.3; }
-    if (duck.y < m) { duck.y = m; duck.vy = Math.abs(duck.vy) * 0.3; }
-    if (duck.y > H - m) { duck.y = H - m; duck.vy = -Math.abs(duck.vy) * 0.3; }
+    if (duck.x < m) { duck.x = m; duck.vx = Math.max(0, duck.vx); }
+    if (duck.x > W - m) { duck.x = W - m; duck.vx = Math.min(0, duck.vx); }
+    if (duck.y < m) { duck.y = m; duck.vy = Math.max(0, duck.vy); }
+    if (duck.y > H - m) { duck.y = H - m; duck.vy = Math.min(0, duck.vy); }
     duck.speed = Math.hypot(duck.vx, duck.vy);
     // turn only when really swimming, so the duck does not spin when it reaches the pointer
     if (duck.speed > 12) {
@@ -292,7 +292,7 @@
   // ---------- duck (3/4 view) ----------
   // The water is drawn straight down so angles measure true; the duck is drawn
   // from a camera tilted CAM above the horizon so it reads as a floating toy.
-  // Body and head are a union of ellipsoids: every piece is stroked thick first and
+  // Body and head are a union of many ellipsoids: every piece is stroked thick first and
   // filled after, which leaves one clean outline around the whole shape.
   const CAM = 46 * Math.PI / 180;
   const SINC = Math.sin(CAM), COSC = Math.cos(CAM);
@@ -301,27 +301,30 @@
 
   // side profile of the body: forward f, height u, semi-axes a (length), b (width), c (height)
   const BODY_KEYS = [
-    [22, 15, 17, 21, 18],   // chest
-    [4, 14, 22, 28, 21],    // middle
-    [-16, 17, 19, 25, 19],  // rear
-    [-31, 26, 11, 14, 11],  // tail base
-    [-45, 41, 3, 3.5, 3],   // tail tip, raised
+    [24, 15, 15, 19, 17],   // chest
+    [6, 14, 22, 28, 21],    // middle
+    [-14, 17, 20, 26, 19],  // rear
+    [-30, 26, 12, 15, 12],  // tail base
+    [-43, 38, 5, 5.5, 5],   // tail tip, raised and rounded
   ];
+  // Catmull-Rom through the keys, sampled densely so the union outline has no bumps
   const BODY = [];
-  for (let k = 0; k < BODY_KEYS.length - 1; k++) {
-    const A = BODY_KEYS[k], B = BODY_KEYS[k + 1];
-    const steps = k < 2 ? 2 : 5;
-    for (let i = 0; i < steps; i++) {
-      const t = i / steps;
-      BODY.push(A.map((v, j) => v + (B[j] - v) * t));
+  {
+    const K = BODY_KEYS, n = K.length, STEPS = 12;
+    const at = i => K[clamp(i, 0, n - 1)];
+    for (let k = 0; k < n - 1; k++) {
+      const p0 = at(k - 1), p1 = at(k), p2 = at(k + 1), p3 = at(k + 2);
+      for (let i = 0; i < STEPS; i++) {
+        const t = i / STEPS, t2 = t * t, t3 = t2 * t;
+        BODY.push(p1.map((_, j) => 0.5 * (2 * p1[j] + (-p0[j] + p2[j]) * t +
+          (2 * p0[j] - 5 * p1[j] + 4 * p2[j] - p3[j]) * t2 + (-p0[j] + 3 * p1[j] - 3 * p2[j] + p3[j]) * t3)));
+      }
     }
+    BODY.push(K[n - 1]);
   }
-  BODY.push(BODY_KEYS[BODY_KEYS.length - 1]);
+  const NECK = [18, 31, 12, 14, 10];  // fills the corner between chest and head
   const HEAD = { f: 25, u: 45, r: 19 };
-  // wing: a "U" curl on the side of the body, given as (longitude, latitude) in degrees
-  // on an envelope ellipsoid around the body
-  const WING_ENV = { f: -2, u: 16, a: 36, b: 27.5, c: 20 };
-  const WING = [[122, 30], [134, 12], [128, -6], [108, -15], [84, -12], [68, 0], [64, 10]];
+  const WINGS = { f: -6, s: 25, u: 20, a: 20, b: 5.5, c: 11.5, pitch: -0.28, yaw: 0.32 };
 
   function drawDuck() {
     const sp = clamp(duck.speed / 600, 0, 1);
@@ -335,20 +338,23 @@
       return { x: duck.x + X, y: duck.y + Y * SINC - (u + bob) * COSC, d: Y * COSC + u * SINC };
     };
     const facing = (nf, ns, nu) => (nf * sh + ns * ch) * COSC + nu * SINC;
-    const ell = (cf, cs, cu, a, b, c, pitch) => {
-      const cp = Math.cos(pitch), spn = Math.sin(pitch);
+    // screen outline of an ellipsoid: centre (cf, cs, cu), semi-axes a, b, c, tilted by pitch then yaw
+    const ell = (cf, cs, cu, a, b, c, pitch = 0, yaw = 0) => {
+      const cp = Math.cos(pitch), spn = Math.sin(pitch), cy = Math.cos(yaw), sy = Math.sin(yaw);
       const cols = [[a * cp, 0, a * spn], [0, b, 0], [-c * spn, 0, c * cp]];
       let p = 0, q = 0, r = 0;
-      for (const [f, s, u] of cols) {
+      for (const [f0, s0, u] of cols) {
+        const f = f0 * cy - s0 * sy, s = f0 * sy + s0 * cy;
         const X = f * ch - s * sh, Y = f * sh + s * ch;
-        const sx = X, sy = Y * SINC - u * COSC;
-        p += sx * sx; q += sx * sy; r += sy * sy;
+        const sx = X, sy2 = Y * SINC - u * COSC;
+        p += sx * sx; q += sx * sy2; r += sy2 * sy2;
       }
       const m = (p + r) / 2, dd = Math.sqrt(((p - r) / 2) ** 2 + q * q);
       const c0 = P(cf, cs, cu);
       return { x: c0.x, y: c0.y, d: c0.d, rx: Math.sqrt(m + dd), ry: Math.sqrt(Math.max(0.01, m - dd)), ang: 0.5 * Math.atan2(2 * q, p - r) };
     };
     const path = e => { ctx.beginPath(); ctx.ellipse(e.x, e.y, e.rx, e.ry, e.ang, 0, TAU); };
+    const blob = (e, fill, lw = LINE) => { path(e); ctx.fillStyle = fill; ctx.fill(); ctx.lineWidth = lw; ctx.stroke(); };
 
     ctx.save();
     ctx.translate(duck.x, duck.y); ctx.scale(1.25, 1.25); ctx.translate(-duck.x, -duck.y);
@@ -357,70 +363,60 @@
 
     // soft shadow on the water
     {
-      const e = ell(-6, 0, -bob, 54, 36, 0.1, 0);
+      const e = ell(-6, 0, -bob, 56, 40, 0.1);
       path({ ...e, x: e.x + 6, y: e.y + 9 });
       ctx.fillStyle = 'rgba(40,118,190,0.4)'; ctx.fill();
     }
 
-    const body = BODY.map(([f, u, a, b, c]) => ell(f, 0, u, a, b, c, 0));
-    const head = ell(HEAD.f, 0, HEAD.u, HEAD.r, HEAD.r, HEAD.r, 0);
+    const body = BODY.map(([f, u, a, b, c]) => ell(f, 0, u, a, b, c));
+    const neck = ell(NECK[0], 0, NECK[1], NECK[2], NECK[3], NECK[4]);
+    const head = ell(HEAD.f, 0, HEAD.u, HEAD.r, HEAD.r, HEAD.r);
     const beak = ell(HEAD.f + 21, 0, HEAD.u - 4, 14, 10, 6, -0.15);
     const beakInFront = beak.d > head.d;
 
-    const drawBeak = () => {
-      path(beak); ctx.fillStyle = ORANGE; ctx.fill();
-      ctx.lineWidth = LINE - 0.5; ctx.stroke();
-    };
-    if (!beakInFront) drawBeak();
+    // wings stand out from the sides; a wing turned away from the camera is left hidden
+    const wings = [-1, 1].map(sg => {
+      const W_ = WINGS;
+      return { sg, e: ell(W_.f, sg * W_.s, W_.u, W_.a, W_.b, W_.c, W_.pitch, -sg * W_.yaw), front: facing(0, sg, 0) > -0.2 };
+    });
+    const drawWing = w => blob(w.e, YELLOW);
+    if (!beakInFront) blob(beak, ORANGE, LINE - 0.5);
 
-    // one outline around body + head
-    const union = body.concat([head]);
+    // one outline around body + neck + head
+    const union = body.concat([neck, head]);
     ctx.lineWidth = LINE * 2;
     for (const e of union) { path(e); ctx.stroke(); }
     ctx.fillStyle = YELLOW;
     for (const e of union) { path(e); ctx.fill(); }
 
-    ctx.lineWidth = LINE;
-    // wing curl on whichever sides face the camera
-    for (const sg of [-1, 1]) {
-      let open = false;
-      for (const [lonD, latD] of WING) {
-        const lon = lonD * Math.PI / 180, lat = latD * Math.PI / 180, cl = Math.cos(lat);
-        const E = WING_ENV;
-        const vis = facing(cl * Math.cos(lon) / E.a, sg * cl * Math.sin(lon) / E.b, Math.sin(lat) / E.c) > 0;
-        const p = P(E.f + E.a * cl * Math.cos(lon), sg * E.b * cl * Math.sin(lon), E.u + E.c * Math.sin(lat));
-        if (vis) {
-          if (!open) { ctx.beginPath(); ctx.moveTo(p.x, p.y); open = true; }
-          else ctx.lineTo(p.x, p.y);
-        } else if (open) { ctx.stroke(); open = false; }
-      }
-      if (open) ctx.stroke();
-    }
-
     // back of the head, where it sits on the body
     {
       const rear = P(-10, 0, 20);
       const dir = Math.atan2(rear.y - head.y, rear.x - head.x);
-      ctx.beginPath(); ctx.arc(head.x, head.y, head.rx, dir - 1.15, dir + 1.15); ctx.stroke();
+      ctx.lineWidth = LINE;
+      ctx.beginPath(); ctx.arc(head.x, head.y, head.rx, dir - 1.1, dir + 1.1); ctx.stroke();
     }
+
+    for (const w of wings) if (w.front) drawWing(w);
 
     // eyes
     ctx.fillStyle = INK;
     for (const sg of [-1, 1]) {
-      let nf = 0.5, ns = 0.66 * sg, nu = 0.36;
+      let nf = 0.52, ns = 0.66 * sg, nu = 0.4;
       const l = Math.hypot(nf, ns, nu); nf /= l; ns /= l; nu /= l;
-      const v = facing(nf, ns, nu);
-      if (v < 0.12) continue;
+      if (facing(nf, ns, nu) < 0.1) continue;
       const p = P(HEAD.f + HEAD.r * nf, HEAD.r * ns, HEAD.u + HEAD.r * nu);
-      ctx.beginPath(); ctx.ellipse(p.x, p.y, 3.4, 4.2, 0, 0, TAU); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(p.x, p.y, 4.3, 5.3, 0, 0, TAU); ctx.fill();
     }
 
-    if (beakInFront) drawBeak();
+    if (beakInFront) blob(beak, ORANGE, LINE - 0.5);
     ctx.restore();
   }
 
   // ---------- angle scale ----------
-  // A plain white scale pinned to the duck, pointing back along the wake.
+  // A small white scale pinned to the duck that spans only the wake's 39° opening.
+  // Outside the arc: half-angle from the centre line (0 → 19.5° each way).
+  // Inside the arc: full opening from one edge to the other (0 → 39°).
   function drawScale() {
     const R = scaleR;
     const rot = duck.heading + Math.PI;
@@ -429,46 +425,54 @@
       const lx = Math.cos(a) * r, ly = Math.sin(a) * r;
       return { x: duck.x + lx * cr - ly * sr, y: duck.y + lx * sr + ly * cr };
     };
+    const tick = (a, r0, r1, w) => {
+      const p = at(r0, a), q = at(r1, a);
+      ctx.lineWidth = w; ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
+    };
+    const K = KELVIN, DEG = Math.PI / 180;
     ctx.lineCap = 'round';
-    ctx.strokeStyle = 'rgba(255,255,255,0.95)';
-    ctx.fillStyle = 'rgba(255,255,255,0.95)';
+    ctx.strokeStyle = '#fff'; ctx.fillStyle = '#fff';
 
-    // ticks
-    for (let d = -25; d <= 25; d++) {
-      const a = d * Math.PI / 180;
-      const major = d % 5 === 0;
-      const p = at(R, a), q = at(R - (major ? 22 : 10), a);
-      ctx.lineWidth = major ? 3.5 : 2;
-      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
-    }
-    // the wake's edges
-    ctx.setLineDash([14, 10]); ctx.lineWidth = 3;
-    for (const sg of [-1, 1]) {
-      const p = at(30, KELVIN * sg), q = at(R + 10, KELVIN * sg);
-      ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(q.x, q.y); ctx.stroke();
-    }
+    // edges of the wake
+    ctx.setLineDash([10, 8]); ctx.lineWidth = 2.5;
+    for (const sg of [-1, 1]) tick(K * sg, 40, R + 26, 2.5);
     ctx.setLineDash([]);
-    // arc between the edges with the full opening angle
+
+    // the arc itself
     ctx.lineWidth = 3;
     ctx.beginPath();
-    for (let i = 0; i <= 30; i++) {
-      const p = at(R * 0.42, -KELVIN + 2 * KELVIN * i / 30);
+    for (let i = 0; i <= 40; i++) {
+      const p = at(R, -K + 2 * K * i / 40);
       if (i) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y);
     }
     ctx.stroke();
 
+    // outer ticks: half-angle from the centre line
+    for (let d = -19; d <= 19; d++) tick(d * DEG, R, R + (d % 5 === 0 ? 12 : 6), d % 5 === 0 ? 2.6 : 1.6);
+    for (const sg of [-1, 1]) tick(K * sg, R, R + 14, 3);
+    // inner ticks: full opening measured from the left edge
+    for (let v = 0; v <= 38; v++) tick(-K + v * DEG, R, R - (v % 5 === 0 ? 12 : 6), v % 5 === 0 ? 2.6 : 1.6);
+    tick(K, R, R - 14, 3);
+
     ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.font = '600 13px Fredoka, ui-rounded, system-ui, sans-serif';
-    for (let d = -25; d <= 25; d += 5) {
-      const p = at(R + 18, d * Math.PI / 180);
+    ctx.font = '600 12px Fredoka, ui-rounded, system-ui, sans-serif';
+    for (const d of [-10, 0, 10]) {
+      const p = at(R + 22, d * DEG);
       ctx.fillText(Math.abs(d) + '°', p.x, p.y);
     }
-    ctx.font = '700 17px Fredoka, ui-rounded, system-ui, sans-serif';
-    const m = at(R * 0.42 + 22, 0);
-    ctx.fillText('39°', m.x, m.y);
+    for (const v of [10, 20, 30]) {
+      const p = at(R - 22, -K + v * DEG);
+      ctx.fillText(v + '°', p.x, p.y);
+    }
+    ctx.font = '700 13px Fredoka, ui-rounded, system-ui, sans-serif';
     for (const sg of [-1, 1]) {
-      const p = at(R + 40, KELVIN * sg);
+      const p = at(R + 26, K * sg + sg * 3 * DEG);
       ctx.fillText('19.5°', p.x, p.y);
+    }
+    {
+      const p0 = at(R - 24, -K - 3 * DEG), p1 = at(R - 24, K + 3 * DEG);
+      ctx.fillText('0°', p0.x, p0.y);
+      ctx.fillText('39°', p1.x, p1.y);
     }
   }
 
