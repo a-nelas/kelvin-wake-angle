@@ -1,0 +1,862 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Kelvin Wake Duck</title>
+<meta name="description" content="A cartoon duck simulator showing that the Kelvin wake angle stays about 19.47 degrees at any speed.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ctext y='.9em' font-size='90'%3E%F0%9F%A6%86%3C/text%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Fredoka:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --water: #8ccff0;
+    --ink: #151515;
+    --card: #fffdf6;
+    --yellow: #fbe27a;
+    --orange: #f7a13b;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: var(--water);
+    font-family: Fredoka, ui-rounded, system-ui, sans-serif;
+    color: var(--ink);
+  }
+  canvas {
+    position: fixed; inset: 0; width: 100%; height: 100%;
+    touch-action: none; cursor: grab; display: block;
+  }
+  canvas.dragging { cursor: grabbing; }
+  .panel {
+    position: fixed; top: 16px; left: 16px;
+    width: min(300px, calc(100vw - 32px));
+    background: var(--card);
+    border: 3.5px solid var(--ink);
+    border-radius: 18px;
+    box-shadow: 5px 6px 0 rgba(21, 21, 21, .85);
+    padding: 12px 16px 14px;
+    user-select: none; -webkit-user-select: none;
+  }
+  .head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: .2px; }
+  .collapse {
+    width: 30px; height: 30px; padding: 0; font-size: 18px; line-height: 1;
+    display: grid; place-items: center;
+  }
+  .panel.collapsed .body { display: none; }
+  p { margin: 6px 0 10px; font-size: 14px; line-height: 1.35; }
+  .row { display: flex; justify-content: space-between; align-items: baseline; font-size: 14px; margin: 4px 0; }
+  .row b { font-weight: 600; font-variant-numeric: tabular-nums; }
+  .meter {
+    height: 14px; border: 2.5px solid var(--ink); border-radius: 99px;
+    overflow: hidden; background: #e6f5fc; margin: 2px 0 8px;
+  }
+  .meter > i { display: block; height: 100%; width: 0; background: var(--orange); border-right: 2.5px solid var(--ink); }
+  .angle {
+    display: flex; align-items: center; gap: 10px;
+    background: #fff4c9; border: 2.5px solid var(--ink); border-radius: 12px;
+    padding: 6px 10px; margin: 8px 0 4px; font-size: 13.5px; line-height: 1.25;
+  }
+  .angle strong { font-size: 22px; font-weight: 700; white-space: nowrap; }
+  .buttons { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 10px; }
+  button {
+    font: inherit; font-size: 13.5px; font-weight: 600; color: var(--ink);
+    border: 2.5px solid var(--ink); border-radius: 12px; background: #fff;
+    padding: 5px 10px; cursor: pointer; box-shadow: 2px 3px 0 var(--ink);
+    transition: transform .06s, box-shadow .06s;
+  }
+  button[aria-pressed="true"] { background: var(--yellow); }
+  button:active { transform: translate(2px, 3px); box-shadow: 0 0 0 var(--ink); }
+  button:focus-visible { outline: 3px solid #2f7fd0; outline-offset: 2px; }
+  .note { font-size: 12px; opacity: .72; margin-top: 10px; line-height: 1.35; }
+  .hint {
+    position: fixed; left: 50%; bottom: max(20px, env(safe-area-inset-bottom));
+    transform: translateX(-50%);
+    background: var(--card); border: 3px solid var(--ink); border-radius: 99px;
+    box-shadow: 3px 4px 0 var(--ink);
+    padding: 8px 18px; font-size: 16px; font-weight: 600; white-space: nowrap;
+    pointer-events: none; transition: opacity .6s, transform .6s;
+  }
+  .hint.gone { opacity: 0; transform: translate(-50%, 16px); }
+  .frozen {
+    position: fixed; top: 16px; right: 16px;
+    background: #dff3ff; border: 3px solid var(--ink); border-radius: 12px;
+    box-shadow: 3px 4px 0 var(--ink); padding: 5px 12px; font-weight: 600;
+    display: none; pointer-events: none;
+  }
+  .frozen.on { display: block; }
+  @media (max-width: 520px) {
+    .panel { padding: 10px 12px 12px; }
+    h1 { font-size: 19px; }
+    p { font-size: 13px; }
+    .hint { font-size: 14px; }
+  }
+</style>
+</head>
+<body>
+<canvas id="lake" aria-label="Lake with a duck. Drag to make the duck swim and watch its wake."></canvas>
+
+<section class="panel" id="panel">
+  <div class="head">
+    <h1>Kelvin Wake 🦆</h1>
+    <button class="collapse" id="collapse" aria-label="Hide panel" title="Hide panel">–</button>
+  </div>
+  <div class="body">
+    <p>Drag anywhere to lead the duck. Swim fast or slow: the waves stretch and shrink, but the wake's V keeps the same angle.</p>
+    <div class="row"><span>Speed</span><b id="speed">0 px/s</b></div>
+    <div class="meter"><i id="meter"></i></div>
+    <div class="row"><span>Wave spacing λ = 2πv²/g</span><b id="lambda">–</b></div>
+    <div class="angle">
+      <strong>19.47°</strong>
+      <span>Kelvin half-angle, arcsin(1/3), the same at every speed</span>
+    </div>
+    <div class="buttons">
+      <button id="btnProt" aria-pressed="true" title="Show or hide the protractor (P)">📐 Protractor</button>
+      <button id="btnLock" aria-pressed="true" title="Pin the protractor to the duck (L)">📌 Pin to duck</button>
+      <button id="btnFreeze" aria-pressed="false" title="Freeze the water to measure (Space)">⏸ Freeze</button>
+      <button id="btnSound" aria-pressed="true" title="Lake sounds on or off (M)">🔊 Sound</button>
+    </div>
+    <div class="note">Unpin the protractor to drag it around; turn it with the round handle or the mouse wheel. Double-click to quack.</div>
+  </div>
+</section>
+
+<div class="frozen" id="frozenBadge">❄ Frozen</div>
+<div class="hint" id="hint">Click &amp; drag to swim 🦆</div>
+
+<script>
+(() => {
+  'use strict';
+
+  // ---------- setup ----------
+  const canvas = document.getElementById('lake');
+  const ctx = canvas.getContext('2d');
+  let W = 0, H = 0, DPR = 1;
+
+  const TAU = Math.PI * 2;
+  const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+  const smooth = (a, b, x) => { const t = clamp((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); };
+  const angDiff = (a, b) => { let d = (b - a) % TAU; if (d > Math.PI) d -= TAU; if (d < -Math.PI) d += TAU; return d; };
+
+  // ---------- wake physics ----------
+  // Deep-water waves: phase speed c = sqrt(g/k), group speed = c/2.
+  // A source moving at U makes steady waves travelling at angle θ to its path with c = U cosθ.
+  // Energy emitted τ seconds ago travels U cosθ τ / 2 along that direction and carries phase gτ/(2U cosθ).
+  // Joining points of equal phase gives the Kelvin crests; their envelope sits at arcsin(1/3) ≈ 19.47°.
+  const G = 9000;            // gravity in px/s² (sets the wave scale)
+  const MAX_AGE = 6;         // seconds of wake history kept
+  const THETA_MAX = 82 * Math.PI / 180;
+  const NT = 129;            // number of propagation directions sampled
+  const MAX_LEVEL = 40;      // crest count limit
+  const MIN_U = 40;
+  const MAX_SPEED = 760;
+  const BREAK = 120;         // px gap that splits a crest line
+
+  const cosT = new Float32Array(NT), sinT = new Float32Array(NT), wT = new Float32Array(NT);
+  for (let j = 0; j < NT; j++) {
+    const th = -THETA_MAX + (2 * THETA_MAX) * j / (NT - 1);
+    cosT[j] = Math.cos(th); sinT[j] = Math.sin(th);
+    // keep the transverse waves and the feathery divergent waves near the cusps,
+    // fade the very oblique ones that would otherwise hatch the inside of the V
+    wT[j] = smooth(0.05, 0.45, cosT[j] * cosT[j]);
+  }
+  const CX = new Float32Array((MAX_LEVEL + 1) * NT);
+  const CY = new Float32Array((MAX_LEVEL + 1) * NT);
+  const CA = new Float32Array((MAX_LEVEL + 1) * NT);
+
+  let simT = 0, clock = 0;
+  let frozen = false;
+  const hist = []; // {t, x, y, dx, dy, u, amp}
+
+  const duck = { x: 0, y: 0, vx: 0, vy: 0, heading: 0, speed: 0 };
+  const pointer = { x: 0, y: 0 };
+  let mode = null; // 'duck' | 'prot' | 'rot'
+  let grab = { dx: 0, dy: 0 };
+
+  const prot = { x: 0, y: 0, rot: Math.PI, size: 300, visible: true, locked: true };
+  const rings = [];
+  let lastRing = 0;
+
+  // floating water doodles
+  const doodles = Array.from({ length: 22 }, () => ({
+    x: Math.random(), y: Math.random(), s: 0.6 + Math.random() * 0.8, p: Math.random() * TAU
+  }));
+
+  function ampFor(u) {
+    const lambda = TAU * u * u / G;
+    return smooth(80, 300, u) * smooth(9, 20, lambda);
+  }
+
+  function resize() {
+    const first = W === 0;
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+    prot.size = clamp(Math.min(W, H) * 0.46, 190, 380);
+    if (first) init();
+    duck.x = clamp(duck.x, 30, W - 30); duck.y = clamp(duck.y, 30, H - 30);
+    if (!prot.locked) { prot.x = clamp(prot.x, 0, W); prot.y = clamp(prot.y, 0, H); }
+  }
+
+  function init() {
+    // Start mid-glide so a wake is already on the water.
+    const U0 = 360;
+    duck.x = W * (W > 700 ? 0.42 : 0.3); duck.y = H * 0.58;
+    duck.vx = U0; duck.vy = -U0 * 0.12; duck.heading = Math.atan2(duck.vy, duck.vx);
+    const dx = Math.cos(duck.heading), dy = Math.sin(duck.heading);
+    simT = 4;
+    for (let tau = 4; tau > 0; tau -= 1 / 60) {
+      hist.push({ t: simT - tau, x: duck.x - dx * U0 * tau, y: duck.y - dy * U0 * tau, dx, dy, u: U0, amp: ampFor(U0) });
+    }
+    pointer.x = duck.x; pointer.y = duck.y;
+  }
+
+  // ---------- simulation ----------
+  function updateDuck(dt) {
+    if (mode === 'duck') {
+      const tx = pointer.x - duck.x, ty = pointer.y - duck.y;
+      const d = Math.hypot(tx, ty);
+      let dvx = 0, dvy = 0;
+      if (d > 3) {
+        const s = Math.min(MAX_SPEED, d * 3.0);
+        dvx = tx / d * s; dvy = ty / d * s;
+      }
+      const k = 1 - Math.exp(-dt * 4.5);
+      duck.vx += (dvx - duck.vx) * k; duck.vy += (dvy - duck.vy) * k;
+    } else {
+      const f = Math.exp(-dt * 0.55);
+      duck.vx *= f; duck.vy *= f;
+    }
+    duck.x += duck.vx * dt; duck.y += duck.vy * dt;
+    const m = 26;
+    if (duck.x < m) { duck.x = m; duck.vx = Math.abs(duck.vx) * 0.3; }
+    if (duck.x > W - m) { duck.x = W - m; duck.vx = -Math.abs(duck.vx) * 0.3; }
+    if (duck.y < m) { duck.y = m; duck.vy = Math.abs(duck.vy) * 0.3; }
+    if (duck.y > H - m) { duck.y = H - m; duck.vy = -Math.abs(duck.vy) * 0.3; }
+    duck.speed = Math.hypot(duck.vx, duck.vy);
+    if (duck.speed > 6) {
+      const target = Math.atan2(duck.vy, duck.vx);
+      duck.heading += angDiff(duck.heading, target) * (1 - Math.exp(-dt * 12));
+    }
+
+    const u = duck.speed;
+    const dx = u > 1 ? duck.vx / u : Math.cos(duck.heading);
+    const dy = u > 1 ? duck.vy / u : Math.sin(duck.heading);
+    hist.push({ t: simT, x: duck.x, y: duck.y, dx, dy, u, amp: ampFor(u) });
+    while (hist.length && simT - hist[0].t > MAX_AGE) hist.shift();
+
+    // idle ripples while floating
+    if (u < 60 && simT - lastRing > 1.7) addRing(duck.x, duck.y);
+    for (let i = rings.length - 1; i >= 0; i--) if (simT - rings[i].t > 3.2) rings.splice(i, 1);
+  }
+
+  function addRing(x, y) { rings.push({ x, y, t: simT }); lastRing = simT; }
+
+  function computeWake() {
+    CX.fill(NaN); CY.fill(NaN); CA.fill(0);
+    const n = hist.length;
+    if (n < 2) return;
+    const fadeStart = MAX_AGE * 0.45;
+    for (let j = 0; j < NT; j++) {
+      const c = cosT[j], s = sinT[j], w = wT[j];
+      let pLv = 0, pX = 0, pY = 0, pA = 0, has = false;
+      for (let i = n - 1; i >= 0; i--) {
+        const h = hist[i];
+        const tau = simT - h.t;
+        const U = h.u > MIN_U ? h.u : MIN_U;
+        const lv = G * tau / (4 * Math.PI * U * c);
+        const r = U * c * tau * 0.5;
+        const nx = h.dx * c - h.dy * s, ny = h.dx * s + h.dy * c;
+        const x = h.x + nx * r, y = h.y + ny * r;
+        const a = h.amp * w * (1 - smooth(fadeStart, MAX_AGE, tau));
+        if (has) {
+          const lo = Math.min(pLv, lv), hi = Math.max(pLv, lv);
+          if (hi - lo < 2.5) {
+            for (let L = Math.floor(lo) + 1; L <= hi && L <= MAX_LEVEL; L++) {
+              if (L < 1) continue;
+              const k = L * NT + j;
+              if (CX[k] === CX[k]) continue; // already set
+              const f = (L - pLv) / (lv - pLv);
+              CX[k] = pX + (x - pX) * f;
+              CY[k] = pY + (y - pY) * f;
+              CA[k] = pA + (a - pA) * f;
+            }
+          }
+        }
+        pLv = lv; pX = x; pY = y; pA = a; has = true;
+        if (lv > MAX_LEVEL + 3 && h.amp === 0) break;
+      }
+    }
+  }
+
+  // ---------- drawing ----------
+  const DASH = [46, 14, 26, 12, 64, 16, 20, 12];
+  const NB = 10;
+  const inkStyle = [], shadowStyle = [], inkW = [], shadowW = [];
+  for (let b = 0; b < NB; b++) {
+    const a = (b + 0.5) / NB;
+    inkStyle.push(`rgba(21,21,21,${Math.min(1, 0.12 + 1.15 * a).toFixed(3)})`);
+    shadowStyle.push(`rgba(46,128,196,${(0.34 * a).toFixed(3)})`);
+    inkW.push(1.6 + 4.6 * a);
+    shadowW.push((1.6 + 4.6 * a) * 2.3);
+  }
+  const bucketOf = a => Math.min(NB - 1, Math.floor(clamp(a, 0, 1) * NB));
+
+  function strokeRun(b, shadow) {
+    ctx.strokeStyle = shadow ? shadowStyle[b] : inkStyle[b];
+    ctx.lineWidth = shadow ? shadowW[b] : inkW[b];
+    ctx.stroke();
+  }
+
+  function drawWake(shadow) {
+    ctx.lineCap = 'round'; ctx.lineJoin = 'round';
+    ctx.setLineDash(DASH);
+    const ox = shadow ? 3 : 0, oy = shadow ? 6 : 0;
+    for (let L = 1; L <= MAX_LEVEL; L++) {
+      const base = L * NT;
+      let open = false, bucket = 0, cum = L * 53, lx = 0, ly = 0;
+      for (let j = 0; j < NT; j++) {
+        const k = base + j, x = CX[k], y = CY[k], a = CA[k];
+        if (!(a > 0.04)) { if (open) { strokeRun(bucket, shadow); open = false; } continue; }
+        if (open) {
+          const d = Math.hypot(x - lx, y - ly);
+          if (d <= BREAK) {
+            ctx.lineTo(x + ox, y + oy); cum += d; lx = x; ly = y;
+            const b = bucketOf(a);
+            if (b !== bucket) {
+              strokeRun(bucket, shadow);
+              ctx.beginPath(); ctx.lineDashOffset = cum; ctx.moveTo(x + ox, y + oy); bucket = b;
+            }
+            continue;
+          }
+          strokeRun(bucket, shadow); open = false;
+        }
+        ctx.beginPath(); ctx.lineDashOffset = cum; ctx.moveTo(x + ox, y + oy);
+        bucket = bucketOf(a); open = true; lx = x; ly = y;
+      }
+      if (open) strokeRun(bucket, shadow);
+    }
+    ctx.setLineDash([]); ctx.lineDashOffset = 0;
+  }
+
+  function drawWater() {
+    ctx.fillStyle = '#8ccff0';
+    ctx.fillRect(0, 0, W, H);
+    // soft light patches
+    const g = ctx.createRadialGradient(W * 0.7, H * 0.2, 0, W * 0.7, H * 0.2, Math.max(W, H) * 0.8);
+    g.addColorStop(0, 'rgba(255,255,255,0.16)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g; ctx.fillRect(0, 0, W, H);
+    // little lighter doodles drifting
+    ctx.strokeStyle = 'rgba(255,255,255,0.38)';
+    ctx.lineCap = 'round';
+    for (const d of doodles) {
+      const x = ((d.x * W + clock * 6 * d.s) % (W + 80)) - 40;
+      const y = d.y * H + Math.sin(clock * 0.6 + d.p) * 4;
+      ctx.lineWidth = 3 * d.s;
+      ctx.beginPath();
+      ctx.moveTo(x - 14 * d.s, y);
+      ctx.quadraticCurveTo(x - 7 * d.s, y - 5 * d.s, x, y);
+      ctx.quadraticCurveTo(x + 7 * d.s, y + 5 * d.s, x + 14 * d.s, y);
+      ctx.stroke();
+    }
+  }
+
+  function drawRings() {
+    ctx.setLineDash([30, 12, 18, 10]);
+    ctx.lineCap = 'round';
+    for (const r of rings) {
+      const age = simT - r.t;
+      const rad = 30 + 34 * age;
+      const a = 1 - age / 3.2;
+      ctx.lineWidth = 4 * a + 1;
+      ctx.strokeStyle = `rgba(46,128,196,${0.3 * a})`;
+      ctx.beginPath(); ctx.arc(r.x + 3, r.y + 6, rad, 0, TAU); ctx.stroke();
+      ctx.strokeStyle = `rgba(21,21,21,${0.85 * a})`;
+      ctx.lineWidth = 3.5 * a + 0.5;
+      ctx.beginPath(); ctx.arc(r.x, r.y, rad, 0.3 + age, TAU - 0.4 + age); ctx.stroke();
+    }
+    ctx.setLineDash([]);
+  }
+
+  function drawBow() {
+    const sp = smooth(60, 500, duck.speed);
+    if (sp <= 0.01) return;
+    ctx.save();
+    ctx.translate(duck.x, duck.y); ctx.rotate(duck.heading);
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = `rgba(46,128,196,${0.35 * sp})`; ctx.lineWidth = 9;
+    ctx.beginPath(); ctx.arc(6 + 2, 6, 50, -1.05, 1.05); ctx.stroke();
+    ctx.strokeStyle = `rgba(21,21,21,${sp})`; ctx.lineWidth = 4.5;
+    ctx.beginPath(); ctx.arc(6, 0, 50, -1.05, 1.05); ctx.stroke();
+    ctx.lineWidth = 3; ctx.strokeStyle = `rgba(21,21,21,${0.7 * sp})`;
+    ctx.beginPath(); ctx.arc(2, 0, 62, -0.55, -0.15); ctx.stroke();
+    ctx.beginPath(); ctx.arc(2, 0, 62, 0.2, 0.6); ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawDuck() {
+    const sp = clamp(duck.speed / 600, 0, 1);
+    const bob = Math.sin(clock * 2.3) * 1.4 * (1 - sp);
+    const wob = Math.sin(clock * 14) * 0.045 * sp;
+    const h = duck.heading + wob;
+    const ch = Math.cos(h), sh = Math.sin(h);
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+
+    // shadow on the water
+    ctx.save();
+    ctx.translate(duck.x + 3, duck.y + 8); ctx.rotate(h);
+    ctx.fillStyle = 'rgba(40,118,190,0.38)';
+    ctx.beginPath(); ctx.ellipse(-8, 0, 50, 33, 0, 0, TAU); ctx.fill();
+    ctx.restore();
+
+    // body (lifted a touch for the 3/4 top view)
+    ctx.save();
+    ctx.translate(duck.x, duck.y - 3 + bob); ctx.rotate(h);
+    ctx.beginPath();
+    ctx.moveTo(-52, 0);
+    ctx.bezierCurveTo(-46, -20, -30, -31, -6, -31);
+    ctx.bezierCurveTo(18, -31, 32, -18, 32, 0);
+    ctx.bezierCurveTo(32, 18, 18, 31, -6, 31);
+    ctx.bezierCurveTo(-30, 31, -46, 20, -52, 0);
+    ctx.closePath();
+    ctx.fillStyle = '#fbe27a'; ctx.fill();
+    ctx.lineWidth = 5; ctx.strokeStyle = '#151515'; ctx.stroke();
+    // wings
+    ctx.lineWidth = 4.5;
+    for (const sgn of [-1, 1]) {
+      ctx.beginPath();
+      ctx.moveTo(6, 20 * sgn);
+      ctx.quadraticCurveTo(-18, 30 * sgn, -32, 15 * sgn);
+      ctx.quadraticCurveTo(-24, 9 * sgn, -12, 11 * sgn);
+      ctx.stroke();
+    }
+    // tail flick
+    ctx.lineWidth = 4;
+    ctx.beginPath(); ctx.moveTo(-44, -6); ctx.quadraticCurveTo(-52, -3, -56, -8); ctx.stroke();
+    ctx.restore();
+
+    // head, lifted more
+    const hx = duck.x + ch * 24, hy = duck.y + sh * 24 - 10 + bob;
+    ctx.save();
+    ctx.translate(hx, hy); ctx.rotate(h);
+    ctx.beginPath(); ctx.arc(0, 0, 19, 0, TAU);
+    ctx.fillStyle = '#fbe27a'; ctx.fill();
+    ctx.lineWidth = 5; ctx.stroke();
+    // beak
+    ctx.beginPath();
+    ctx.moveTo(11, -8);
+    ctx.quadraticCurveTo(30, -10, 33, 0);
+    ctx.quadraticCurveTo(30, 10, 11, 8);
+    ctx.quadraticCurveTo(15, 0, 11, -8);
+    ctx.closePath();
+    ctx.fillStyle = '#f7a13b'; ctx.fill();
+    ctx.lineWidth = 4; ctx.stroke();
+    // eyes
+    ctx.fillStyle = '#151515';
+    for (const sgn of [-1, 1]) {
+      ctx.beginPath(); ctx.arc(4, 9.5 * sgn, 3.6, 0, TAU); ctx.fill();
+    }
+    ctx.fillStyle = '#fff';
+    for (const sgn of [-1, 1]) {
+      ctx.beginPath(); ctx.arc(5.2, 9.5 * sgn - 1.2, 1.1, 0, TAU); ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  // ---------- protractor ----------
+  function protLocal(px, py) {
+    const dx = px - prot.x, dy = py - prot.y;
+    const c = Math.cos(-prot.rot), s = Math.sin(-prot.rot);
+    return { x: dx * c - dy * s, y: dx * s + dy * c };
+  }
+  function protScreen(lx, ly) {
+    const c = Math.cos(prot.rot), s = Math.sin(prot.rot);
+    return { x: prot.x + lx * c - ly * s, y: prot.y + lx * s + ly * c };
+  }
+  function hitProt(px, py) {
+    if (!prot.visible || prot.locked) return false;
+    const p = protLocal(px, py);
+    return p.x >= -6 && p.x <= prot.size + 6 && Math.abs(p.y) <= prot.size / 2 + 6;
+  }
+  function hitHandle(px, py) {
+    if (!prot.visible || prot.locked) return false;
+    const h = protScreen(prot.size + 30, 0);
+    return Math.hypot(px - h.x, py - h.y) < 24;
+  }
+  function edgeT(ca, sa, S) {
+    const tB = ca > 1e-6 ? S / ca : Infinity;
+    const tS = Math.abs(sa) > 1e-6 ? (S / 2) / Math.abs(sa) : Infinity;
+    return Math.min(tB, tS);
+  }
+
+  function drawProtractor() {
+    if (!prot.visible) return;
+    const S = prot.size;
+    if (prot.locked) { prot.x = duck.x; prot.y = duck.y; prot.rot = duck.heading + Math.PI; }
+
+    ctx.save();
+    ctx.translate(prot.x, prot.y); ctx.rotate(prot.rot);
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    // drop shadow + plate
+    ctx.fillStyle = 'rgba(21,21,21,0.16)';
+    roundRect(5, -S / 2 + 6, S, S, 14); ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    roundRect(0, -S / 2, S, S, 14); ctx.fill();
+    ctx.lineWidth = 4; ctx.strokeStyle = '#151515'; ctx.stroke();
+
+    // ticks
+    ctx.strokeStyle = '#151515';
+    for (let a = -90; a <= 90; a++) {
+      const r = a * Math.PI / 180, ca = Math.cos(r), sa = Math.sin(r);
+      const t = edgeT(ca, sa, S) - 3;
+      const len = a % 10 === 0 ? 20 : a % 5 === 0 ? 12 : 6;
+      ctx.lineWidth = a % 10 === 0 ? 2.6 : a % 5 === 0 ? 2 : 1.3;
+      ctx.beginPath();
+      ctx.moveTo(ca * t, sa * t);
+      ctx.lineTo(ca * (t - len), sa * (t - len));
+      ctx.stroke();
+    }
+    // centre axis
+    ctx.setLineDash([10, 8]); ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(21,21,21,0.55)';
+    ctx.beginPath(); ctx.moveTo(14, 0); ctx.lineTo(S - 24, 0); ctx.stroke();
+    // Kelvin rays
+    const kr = Math.asin(1 / 3);
+    ctx.setLineDash([12, 8]); ctx.lineWidth = 3; ctx.strokeStyle = '#e8731a';
+    for (const sgn of [-1, 1]) {
+      const ca = Math.cos(kr), sa = Math.sin(kr) * sgn;
+      const t = edgeT(ca, sa, S) - 26;
+      ctx.beginPath(); ctx.moveTo(ca * 16, sa * 16); ctx.lineTo(ca * t, sa * t); ctx.stroke();
+    }
+    ctx.setLineDash([]);
+    // centre mark
+    ctx.fillStyle = '#151515';
+    ctx.beginPath(); ctx.arc(0, 0, 5, 0, TAU); ctx.fill();
+    ctx.lineWidth = 2.5;
+    ctx.beginPath(); ctx.moveTo(0, -12); ctx.lineTo(0, 12); ctx.stroke();
+    ctx.restore();
+
+    // upright labels
+    ctx.fillStyle = '#151515';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.font = `600 ${S < 240 ? 11 : 13}px Fredoka, ui-rounded, system-ui, sans-serif`;
+    for (let a = -80; a <= 80; a += 10) {
+      const r = a * Math.PI / 180, ca = Math.cos(r), sa = Math.sin(r);
+      const t = edgeT(ca, sa, S) - 34;
+      const p = protScreen(ca * t, sa * t);
+      ctx.fillText(Math.abs(a) + '°', p.x, p.y);
+    }
+    // Kelvin label
+    {
+      const ca = Math.cos(Math.asin(1 / 3)), sa = -1 / 3;
+      const t = edgeT(ca, sa, S) * 0.55;
+      const p = protScreen(ca * t, sa * t);
+      ctx.font = `700 ${S < 240 ? 11 : 13}px Fredoka, ui-rounded, system-ui, sans-serif`;
+      const label = '19.5°';
+      const w = ctx.measureText(label).width + 12;
+      ctx.fillStyle = 'rgba(255,248,230,0.92)';
+      roundRect(p.x - w / 2, p.y - 10, w, 20, 8); ctx.fill();
+      ctx.lineWidth = 2; ctx.strokeStyle = '#e8731a'; ctx.stroke();
+      ctx.fillStyle = '#b4520c'; ctx.fillText(label, p.x, p.y + 0.5);
+    }
+
+    // rotate handle
+    if (!prot.locked) {
+      const h = protScreen(S + 30, 0);
+      const e = protScreen(S, 0);
+      ctx.strokeStyle = '#151515'; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.moveTo(e.x, e.y); ctx.lineTo(h.x, h.y); ctx.stroke();
+      ctx.beginPath(); ctx.arc(h.x, h.y, 16, 0, TAU);
+      ctx.fillStyle = '#fff'; ctx.fill(); ctx.lineWidth = 3.5; ctx.stroke();
+      ctx.lineWidth = 2.6;
+      ctx.beginPath(); ctx.arc(h.x, h.y, 7.5, -2.6, 1.4); ctx.stroke();
+      const ax = h.x + Math.cos(1.4) * 7.5, ay = h.y + Math.sin(1.4) * 7.5;
+      ctx.beginPath(); ctx.moveTo(ax - 5, ay - 1); ctx.lineTo(ax, ay); ctx.lineTo(ax + 1, ay - 5); ctx.stroke();
+    }
+  }
+
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function render() {
+    drawWater();
+    drawRings();
+    drawWake(true);
+    drawWake(false);
+    drawBow();
+    drawProtractor();
+    drawDuck();
+  }
+
+  // ---------- sound ----------
+  let audio = null;
+  let soundOn = true;
+
+  function makeNoise(ac, brown) {
+    const len = Math.floor(ac.sampleRate * 4);
+    const buf = ac.createBuffer(2, len, ac.sampleRate);
+    for (let ch = 0; ch < 2; ch++) {
+      const d = buf.getChannelData(ch);
+      let last = 0;
+      for (let i = 0; i < len; i++) {
+        const w = Math.random() * 2 - 1;
+        if (brown) { last = (last + 0.02 * w) / 1.02; d[i] = last * 3.5; }
+        else d[i] = w;
+      }
+    }
+    return buf;
+  }
+
+  function startAudio() {
+    if (!soundOn) return;
+    if (audio) { if (audio.ac.state === 'suspended') audio.ac.resume(); return; }
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return;
+    const ac = new AC();
+    const master = ac.createGain(); master.gain.value = 0; master.connect(ac.destination);
+    master.gain.setTargetAtTime(0.85, ac.currentTime, 1.2);
+    const white = makeNoise(ac, false), brown = makeNoise(ac, true);
+    const loop = buf => { const s = ac.createBufferSource(); s.buffer = buf; s.loop = true; s.start(0, Math.random() * 3); return s; };
+
+    // gentle lapping bed
+    const lapLP = ac.createBiquadFilter(); lapLP.type = 'lowpass'; lapLP.frequency.value = 420; lapLP.Q.value = 0.4;
+    const lapG = ac.createGain(); lapG.gain.value = 0.2;
+    loop(brown).connect(lapLP).connect(lapG).connect(master);
+
+    // soft airy shimmer
+    const shBP = ac.createBiquadFilter(); shBP.type = 'bandpass'; shBP.frequency.value = 2400; shBP.Q.value = 0.5;
+    const shG = ac.createGain(); shG.gain.value = 0.008;
+    loop(white).connect(shBP).connect(shG).connect(master);
+
+    // paddling (follows the duck's speed)
+    const padBP = ac.createBiquadFilter(); padBP.type = 'bandpass'; padBP.frequency.value = 800; padBP.Q.value = 1.1;
+    const padG = ac.createGain(); padG.gain.value = 0;
+    loop(white).connect(padBP).connect(padG).connect(master);
+
+    audio = { ac, master, lapLP, lapG, shG, padBP, padG, white, brown,
+      nextSlosh: ac.currentTime + 1.2, nextBird: ac.currentTime + 3 + Math.random() * 4 };
+  }
+
+  function pan(ac, v) {
+    if (ac.createStereoPanner) { const p = ac.createStereoPanner(); p.pan.value = v; return p; }
+    return ac.createGain();
+  }
+
+  function slosh() {
+    const { ac, master, brown } = audio, t = ac.currentTime;
+    const s = ac.createBufferSource(); s.buffer = brown; s.start(t, Math.random() * 2, 2.5);
+    const bp = ac.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 220 + Math.random() * 380; bp.Q.value = 0.9;
+    const g = ac.createGain(); g.gain.setValueAtTime(0, t);
+    const peak = 0.18 + Math.random() * 0.14;
+    g.gain.linearRampToValueAtTime(peak, t + 0.35 + Math.random() * 0.3);
+    g.gain.exponentialRampToValueAtTime(0.0008, t + 2.2);
+    s.connect(bp).connect(g).connect(pan(ac, Math.random() * 1.4 - 0.7)).connect(master);
+  }
+
+  function birds() {
+    const { ac, master } = audio;
+    let t = ac.currentTime + 0.05;
+    const base = 2600 + Math.random() * 1500;
+    const n = 2 + Math.floor(Math.random() * 3);
+    const p = pan(ac, Math.random() * 1.6 - 0.8);
+    const lp = ac.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 5200;
+    const out = ac.createGain(); out.gain.value = 0.5;
+    lp.connect(out).connect(p).connect(master);
+    for (let i = 0; i < n; i++) {
+      const o = ac.createOscillator(); o.type = 'sine';
+      const f = base * (0.92 + Math.random() * 0.16);
+      o.frequency.setValueAtTime(f, t);
+      o.frequency.linearRampToValueAtTime(f * 1.32, t + 0.05);
+      o.frequency.linearRampToValueAtTime(f * 0.88, t + 0.12);
+      const g = ac.createGain(); g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(0.05, t + 0.012);
+      g.gain.exponentialRampToValueAtTime(0.0005, t + 0.14);
+      o.connect(g).connect(lp); o.start(t); o.stop(t + 0.16);
+      t += 0.15 + Math.random() * 0.12;
+    }
+  }
+
+  function quack() {
+    startAudio();
+    if (!audio || !soundOn) return;
+    const { ac, master } = audio, t = ac.currentTime;
+    const g = ac.createGain(); g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.3, t + 0.02);
+    g.gain.setValueAtTime(0.3, t + 0.11);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.26);
+    const f1 = ac.createBiquadFilter(); f1.type = 'bandpass'; f1.frequency.value = 1050; f1.Q.value = 3;
+    const f2 = ac.createBiquadFilter(); f2.type = 'bandpass'; f2.frequency.value = 2300; f2.Q.value = 4;
+    const mix = ac.createGain(); mix.gain.value = 1.6;
+    f1.connect(mix); f2.connect(mix); mix.connect(g).connect(master);
+    for (const det of [0, 4]) {
+      const o = ac.createOscillator(); o.type = 'sawtooth';
+      o.frequency.setValueAtTime(560 + det, t);
+      o.frequency.exponentialRampToValueAtTime(390 + det, t + 0.24);
+      o.connect(f1); o.connect(f2); o.start(t); o.stop(t + 0.28);
+    }
+  }
+
+  function plop() {
+    if (!audio || !soundOn) return;
+    const { ac, master } = audio, t = ac.currentTime;
+    const o = ac.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(820, t); o.frequency.exponentialRampToValueAtTime(190, t + 0.11);
+    const g = ac.createGain(); g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(0.09, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0005, t + 0.16);
+    o.connect(g).connect(master); o.start(t); o.stop(t + 0.18);
+  }
+
+  function audioTick() {
+    if (!audio || audio.ac.state !== 'running') return;
+    const ac = audio.ac, t = ac.currentTime;
+    const m = 0.55 + 0.25 * Math.sin(t * 0.37) + 0.2 * Math.sin(t * 0.93 + 1.3);
+    audio.lapG.gain.setTargetAtTime(0.16 + 0.16 * m, t, 0.4);
+    audio.lapLP.frequency.setTargetAtTime(300 + 220 * m, t, 0.4);
+    const sp = frozen ? 0 : smooth(30, 700, duck.speed);
+    const flutter = 0.65 + 0.35 * Math.sin(t * TAU * 4.2);
+    audio.padG.gain.setTargetAtTime(0.11 * sp * flutter, t, 0.04);
+    audio.padBP.frequency.setTargetAtTime(550 + 1000 * sp, t, 0.1);
+    if (t > audio.nextSlosh) { slosh(); audio.nextSlosh = t + 1.6 + Math.random() * 3.2; }
+    if (t > audio.nextBird) { birds(); audio.nextBird = t + 7 + Math.random() * 13; }
+  }
+
+  function setSound(on) {
+    soundOn = on;
+    btnSound.setAttribute('aria-pressed', String(on));
+    btnSound.textContent = on ? '🔊 Sound' : '🔈 Muted';
+    if (on) startAudio();
+    if (audio) audio.master.gain.setTargetAtTime(on ? 0.85 : 0, audio.ac.currentTime, 0.25);
+  }
+
+  // ---------- input ----------
+  const hint = document.getElementById('hint');
+  let hinted = false;
+
+  function updateCursor(x, y) {
+    if (mode === 'duck') { canvas.style.cursor = 'grabbing'; return; }
+    if (mode) { canvas.style.cursor = mode === 'rot' ? 'grabbing' : 'move'; return; }
+    canvas.style.cursor = hitHandle(x, y) ? 'grab' : hitProt(x, y) ? 'move' : 'crosshair';
+  }
+
+  canvas.addEventListener('pointerdown', e => {
+    startAudio();
+    const x = e.clientX, y = e.clientY;
+    try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+    if (hitHandle(x, y)) mode = 'rot';
+    else if (hitProt(x, y)) { mode = 'prot'; grab = { dx: prot.x - x, dy: prot.y - y }; }
+    else {
+      mode = 'duck'; pointer.x = x; pointer.y = y;
+      if (!frozen) plop();
+      if (!hinted) { hinted = true; hint.classList.add('gone'); }
+    }
+    updateCursor(x, y);
+  });
+  canvas.addEventListener('pointermove', e => {
+    const x = e.clientX, y = e.clientY;
+    if (mode === 'duck') { pointer.x = x; pointer.y = y; }
+    else if (mode === 'prot') { prot.x = x + grab.dx; prot.y = y + grab.dy; }
+    else if (mode === 'rot') {
+      let r = Math.atan2(y - prot.y, x - prot.x);
+      if (e.shiftKey) r = Math.round(r / (Math.PI / 36)) * (Math.PI / 36);
+      prot.rot = r;
+    }
+    updateCursor(x, y);
+  });
+  const end = e => { mode = null; updateCursor(e.clientX, e.clientY); };
+  canvas.addEventListener('pointerup', end);
+  canvas.addEventListener('pointercancel', end);
+  canvas.addEventListener('wheel', e => {
+    if (!hitProt(e.clientX, e.clientY) && !hitHandle(e.clientX, e.clientY)) return;
+    e.preventDefault();
+    prot.rot += (e.deltaY > 0 ? 1 : -1) * (e.shiftKey ? 0.25 : 1) * Math.PI / 180;
+  }, { passive: false });
+  canvas.addEventListener('dblclick', e => {
+    if (hitProt(e.clientX, e.clientY)) return;
+    quack();
+    if (!frozen) addRing(duck.x, duck.y);
+  });
+
+  // ---------- panel ----------
+  const btnProt = document.getElementById('btnProt');
+  const btnLock = document.getElementById('btnLock');
+  const btnFreeze = document.getElementById('btnFreeze');
+  const btnSound = document.getElementById('btnSound');
+  const frozenBadge = document.getElementById('frozenBadge');
+  const panel = document.getElementById('panel');
+  const collapseBtn = document.getElementById('collapse');
+
+  function setProt(on) { prot.visible = on; btnProt.setAttribute('aria-pressed', String(on)); btnLock.disabled = !on; btnLock.style.opacity = on ? 1 : 0.5; }
+  function setLock(on) {
+    prot.locked = on; btnLock.setAttribute('aria-pressed', String(on));
+    btnLock.textContent = on ? '📌 Pin to duck' : '📌 Pinned: off';
+    if (!on) {
+      // drop it just off the duck so it is easy to grab
+      prot.x = clamp(prot.x, 40, W - 40); prot.y = clamp(prot.y, 40, H - 40);
+    }
+  }
+  function setFreeze(on) {
+    frozen = on; btnFreeze.setAttribute('aria-pressed', String(on));
+    btnFreeze.textContent = on ? '▶ Resume' : '⏸ Freeze';
+    frozenBadge.classList.toggle('on', on);
+  }
+  btnProt.onclick = () => { startAudio(); setProt(!prot.visible); };
+  btnLock.onclick = () => { startAudio(); setLock(!prot.locked); };
+  btnFreeze.onclick = () => { startAudio(); setFreeze(!frozen); };
+  btnSound.onclick = () => setSound(!soundOn);
+  collapseBtn.onclick = () => {
+    const c = panel.classList.toggle('collapsed');
+    collapseBtn.textContent = c ? '+' : '–';
+    collapseBtn.setAttribute('aria-label', c ? 'Show panel' : 'Hide panel');
+  };
+  if (window.innerWidth < 520) collapseBtn.onclick();
+
+  window.addEventListener('keydown', e => {
+    if (e.target && e.target.tagName === 'BUTTON' && (e.key === ' ' || e.key === 'Enter')) return;
+    const k = e.key.toLowerCase();
+    if (k === ' ') { e.preventDefault(); setFreeze(!frozen); }
+    else if (k === 'p') setProt(!prot.visible);
+    else if (k === 'l') setLock(!prot.locked);
+    else if (k === 'm') setSound(!soundOn);
+    else if (k === 'q') quack();
+  });
+
+  const speedEl = document.getElementById('speed');
+  const lambdaEl = document.getElementById('lambda');
+  const meterEl = document.getElementById('meter');
+  let hudT = 0;
+  function updateHud() {
+    const u = duck.speed;
+    speedEl.textContent = Math.round(u) + ' px/s';
+    meterEl.style.width = (clamp(u / MAX_SPEED, 0, 1) * 100).toFixed(1) + '%';
+    lambdaEl.textContent = u > 90 ? Math.round(TAU * u * u / G) + ' px' : '–';
+  }
+
+  // ---------- loop ----------
+  window.addEventListener('resize', resize);
+  resize();
+  let last = performance.now();
+  function frame(now) {
+    const dt = Math.min(0.05, Math.max(0, (now - last) / 1000));
+    last = now; clock += dt;
+    if (!frozen) { simT += dt; updateDuck(dt); }
+    computeWake();
+    render();
+    audioTick();
+    if ((hudT += dt) > 0.1) { hudT = 0; updateHud(); }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
