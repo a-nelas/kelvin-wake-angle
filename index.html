@@ -92,19 +92,20 @@
   const pointer = { x: 0, y: 0, active: false };
 
   let scaleR = 400;        // largest the scale gets
-  let scaleCur = 0;        // current radius, follows the straight part of the wake
+  let scaleCur = 0;        // current radius, follows the part of the path the wake came from
+  let scaleRot = 0;        // direction the scale opens towards
   let scaleAlpha = 1;
   const rings = [];
   let lastRing = 0;
 
+  let started = false;
   function resize() {
-    const first = W === 0;
     DPR = Math.min(window.devicePixelRatio || 1, 2);
     W = window.innerWidth; H = window.innerHeight;
     canvas.width = Math.round(W * DPR); canvas.height = Math.round(H * DPR);
     ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
     scaleR = clamp(Math.min(W, H) * 0.45, 180, 250);
-    if (first) init();
+    if (!started && W > 0 && H > 0) { started = true; init(); }
     duck.x = clamp(duck.x, 30, W - 30); duck.y = clamp(duck.y, 30, H - 30);
   }
 
@@ -112,6 +113,7 @@
     const U0 = clamp(W * 0.5 * 0.55, 300, 420);
     duck.x = W * 0.3; duck.y = H * 0.55;
     duck.vx = U0; duck.vy = -U0 * 0.1; duck.heading = Math.atan2(duck.vy, duck.vx);
+    scaleRot = duck.heading + Math.PI;
     const dx = Math.cos(duck.heading), dy = Math.sin(duck.heading);
     simT = MAX_AGE;
     for (let tau = MAX_AGE; tau > 0; tau -= 1 / 60) {
@@ -259,7 +261,7 @@
     ctx.setLineDash([60, 22]);
     ctx.lineCap = 'round';
     for (const r of rings) {
-      const age = simT - r.t;
+      const age = Math.max(0, simT - r.t);
       const rad = 46 + 30 * age;
       const a = 1 - age / 3;
       ctx.lineWidth = 9 * a + 2;
@@ -421,30 +423,45 @@
     ctx.restore();
   }
 
-  // How far back the duck has swum in a straight line. On a straight run the wake's arms
-  // reach out to about 0.7× that distance from the duck (the cusp of the crest launched at
-  // the start of the run), so beyond that the 19.5° lines no longer describe the wake.
-  function straightRun() {
+  // Which part of the path the visible wake came from. Walk back along the path until it has
+  // turned more than ~45° from where the duck heads now (or the duck was nearly still). The
+  // wake's arms reach out to about 0.7x the distance to that point, and on a gentle curve the
+  // V points along the chord towards it, so the scale bends round with the wake.
+  function wakeRun() {
     const hx = Math.cos(duck.heading), hy = Math.sin(duck.heading);
-    let len = 0;
+    const maxLen = scaleR / 0.7;
+    let len = 0, px = duck.x, py = duck.y;
     for (let i = hist.length - 1; i > 0; i--) {
       const h = hist[i], p = hist[i - 1];
-      if (h.u < 60 || h.dx * hx + h.dy * hy < 0.985) break;   // speed too low or turned > 10°
+      if (h.u < 60 || h.dx * hx + h.dy * hy < 0.7) break;
       len += Math.hypot(h.x - p.x, h.y - p.y);
+      px = p.x; py = p.y;
+      if (len >= maxLen) break;
     }
-    return len;
+    return { len: Math.hypot(px - duck.x, py - duck.y), x: px, y: py };
   }
 
   function updateScale(dt) {
-    const target = Math.min(scaleR, 0.7 * straightRun());
-    scaleCur += (target - scaleCur) * (1 - Math.exp(-dt * (target < scaleCur ? 7 : 3)));
-    const want = smooth(25, 140, duck.speed) * smooth(45, 100, scaleCur);
-    scaleAlpha += (want - scaleAlpha) * (1 - Math.exp(-dt * 3));
+    // while swimming, follow the wake; once the duck slows down, hold the last shape so it
+    // can still be read while it fades
+    if (duck.speed >= 60) {
+      const run = wakeRun();
+      const target = Math.min(scaleR, 0.7 * run.len);
+      scaleCur += (target - scaleCur) * (1 - Math.exp(-dt * (target < scaleCur ? 4 : 3)));
+      // point the V back along the chord of the path; straight behind the tail when unclear
+      const want = run.len > 30 ? Math.atan2(run.y - duck.y, run.x - duck.x) : duck.heading + Math.PI;
+      let d = want - scaleRot;
+      d = Math.atan2(Math.sin(d), Math.cos(d));
+      scaleRot += d * (1 - Math.exp(-dt * 6));
+    }
+    // fade in quickly, fade out slowly so there's time to read it
+    const show = smooth(25, 110, duck.speed) * smooth(30, 70, scaleCur);
+    scaleAlpha += (show - scaleAlpha) * (1 - Math.exp(-dt * (show > scaleAlpha ? 9 : 0.7)));
   }
 
   function drawScaleMarks() {
     const R = scaleCur;
-    const rot = duck.heading + Math.PI;
+    const rot = scaleRot;
     const cr = Math.cos(rot), sr = Math.sin(rot);
     const at = (r, a) => {
       const lx = Math.cos(a) * r, ly = Math.sin(a) * r;

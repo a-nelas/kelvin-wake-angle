@@ -9,7 +9,7 @@ A cartoon simulator for the **Kelvin wake angle**. Move the pointer and the duck
 - **Move the pointer** (or touch and drag): the duck swims after it
 - **Speaker button**: cartoon lake sounds (plops, bubbles, paddle plips, birds) on or off. Browsers start sound only after a click, tap or key press
 
-A small white scale rides along behind the duck while it swims and spans only the wake's 39° opening. Its size follows the part of the wake made by a straight run (about 0.7× the straight distance swum), so it shrinks and fades when the duck turns or stops and grows back on a straight line. The outer side counts the half-angle from the centre line (0 → 19.5° each way). The inner side shows the full opening, 39°.
+A small white scale rides along behind the duck while it swims and spans only the wake's 39° opening. It bends round with the wake on curves: it points back along the stretch of path that made the visible wake and reaches about 0.7× that distance. It fades in quickly when the duck swims and fades out slowly (holding its last shape) when it stops, so there's time to read it. The outer side counts the half-angle from the centre line (0 → 19.5° each way). The inner side shows the full opening, 39°.
 
 ## How the wake is simulated
 
